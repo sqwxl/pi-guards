@@ -23,7 +23,8 @@
  * with "Operation aborted", which loses the rejection.
  *
  * The prompt mirrors Claude Code: three choices, with Tab opening an inline
- * editor so any answer can carry a message. A message is attached to the tool
+ * editor so any answer can carry a message. Ctrl+O toggles tool output while the
+ * prompt is open, matching Pi's built-in selector. A message is attached to the tool
  * result the model reads next: on an approval it is appended to the executed
  * tool's result, on a rejection it is added to the block reason with
  * `terminate` omitted so the model can act on it in the same run.
@@ -129,6 +130,12 @@ async function askApproval(
 		}
 
 		function handleInput(data: string): void {
+			if (keybindings.matches(data, "app.tools.expand")) {
+				ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded());
+				refresh();
+				return;
+			}
+
 			if (editing) {
 				if (matchesKey(data, Key.escape)) {
 					editing = false;
@@ -191,7 +198,8 @@ async function askApproval(
 				}
 				lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), lineWidth, ""));
 			} else {
-				const hint = " ↑↓ choose • Tab to add a message • Enter to confirm • Esc to cancel";
+				const toolsKey = keybindings.getKeys("app.tools.expand")[0];
+				const hint = ` ↑↓ choose • Tab to add a message • Enter to confirm • Esc to cancel${toolsKey ? ` • ${toolsKey} toggle tool output` : ""}`;
 				lines.push(truncateToWidth(theme.fg("dim", hint), lineWidth, ""));
 			}
 			lines.push(theme.fg("accent", "─".repeat(lineWidth)));
