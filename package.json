@@ -1,0 +1,12 @@
+{
+	"name": "pi-guards",
+	"private": true,
+	"type": "module",
+	"description": "Pi extensions that gate destructive bash and file writes. bash-guard is shared with Claude Code hooks.",
+	"scripts": {
+		"test": "node bash-guard/guard.test.mjs && node bash-guard/kill.test.mjs"
+	},
+	"dependencies": {
+		"unbash": "^5.0.0"
+	}
+}
