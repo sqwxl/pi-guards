@@ -18,11 +18,17 @@
  * rejected, and the run ends without the model spending a turn responding.
  * Do not call `ctx.abort()` here: an aborted signal replaces the block reason
  * with "Operation aborted", which loses the rejection.
+ *
+ * PARANOID mode belongs to `confirm-writes`, which asks before every bash call.
+ * This extension tracks the mode over `pi.events` and stays silent in PARANOID:
+ * the approval already covers the command, so the file-write refusal and the
+ * dangerous-command prompt would only second-guess the user.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { findBashFileEdit } from "../bash-guard/guard.ts";
+import { MODE_EVENT, isMode, type Mode } from "../modes.ts";
 
 const dangerousPatterns = [
 	/\brm\s+(-[a-z]*[rf][a-z]*\s+)?(?:--recursive|--force|\/|~|\*)/i, // rm -rf on paths
@@ -34,8 +40,21 @@ const dangerousPatterns = [
 ];
 
 export default function (pi: ExtensionAPI) {
+	let mode: Mode = "paranoid";
+
+	pi.events.on(MODE_EVENT, (data) => {
+		const next = (data as { mode?: unknown } | undefined)?.mode;
+		if (typeof next === "string" && isMode(next)) {
+			mode = next;
+		}
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "bash") return undefined;
+
+		// PARANOID prompts for every bash call in confirm-writes; asking again here
+		// would show two dialogs for one command.
+		if (mode === "paranoid") return undefined;
 
 		const command = event.input.command as string;
 		const fileEdit = findBashFileEdit(command);

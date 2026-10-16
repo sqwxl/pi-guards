@@ -29,11 +29,14 @@
  * tool's result, on a rejection it is added to the block reason with
  * `terminate` omitted so the model can act on it in the same run.
  *
- * Two modes: `ask` (default) prompts for every gated call, `auto` writes
- * without prompting. Toggle with shift+tab, switch with /edits, or choose
- * "allow all writes this session" in the prompt. `--auto-edits` starts a
- * session in auto mode. The mode is per session and resets on session start.
- * shift+tab requires `app.thinking.cycle` to be unbound in keybindings.json.
+ * Three modes. PARANOID (the default) prompts for every tool call except file
+ * reads, CAREFUL prompts for writes, YOLO writes without prompting. Cycle with
+ * shift+tab, switch with /edits, or choose "allow everything this session" in
+ * the prompt. `--auto-edits` starts a session in YOLO. The mode is per session
+ * and resets to PARANOID on session start. The active mode is published on
+ * `pi.events`, so `permission-gate` can stay silent when PARANOID already asks
+ * about a bash call. shift+tab requires `app.thinking.cycle` to be unbound in
+ * keybindings.json.
  */
 
 import type {
@@ -47,7 +50,17 @@ import { Editor, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 
-type WriteMode = "ask" | "auto";
+import {
+	MODE_COLOR,
+	MODE_EVENT,
+	MODE_HINT,
+	MODE_LABEL,
+	WRITE_TOOLS,
+	isMode,
+	needsApproval,
+	nextMode,
+	type Mode,
+} from "../modes.ts";
 
 const ALLOWED_PREFIXES = ["/tmp/", "/private/tmp/", "/var/folders/"];
 
@@ -82,13 +95,17 @@ async function editFailure(input: EditToolInput, ctx: ExtensionContext): Promise
 	}
 }
 
-const WRITE_OPTIONS = [
-	{ id: "yes", label: "Yes" },
-	{ id: "allow-all", label: "Yes, allow all writes this session" },
-	{ id: "no", label: "No" },
-] as const;
+type Verdict = { choice: "yes" | "allow-all" | "no"; message: string };
 
-type WriteVerdict = { choice: (typeof WRITE_OPTIONS)[number]["id"]; message: string };
+/** One-line description of a tool call for the prompt and the rejection reason. */
+function callSubject(input: unknown): string {
+	const raw =
+		typeof input === "object" && input !== null && "command" in input
+			? String((input as { command: unknown }).command)
+			: (JSON.stringify(input) ?? "");
+	const flat = raw.replace(/\s+/g, " ").trim();
+	return flat.length > 160 ? `${flat.slice(0, 159)}…` : flat;
+}
 
 /**
  * Ask for a decision with an optional message. Tab opens the inline editor;
@@ -97,17 +114,24 @@ type WriteVerdict = { choice: (typeof WRITE_OPTIONS)[number]["id"]; message: str
  */
 async function askApproval(
 	ctx: ExtensionContext,
-	toolName: string,
-	path: string,
-): Promise<WriteVerdict | undefined> {
+	title: string,
+	subject: string,
+	allowAllLabel: string,
+): Promise<Verdict | undefined> {
+	const options: ReadonlyArray<{ id: Verdict["choice"]; label: string }> = [
+		{ id: "yes", label: "Yes" },
+		{ id: "allow-all", label: allowAllLabel },
+		{ id: "no", label: "No" },
+	];
+
 	if (ctx.mode !== "tui") {
-		const labels = WRITE_OPTIONS.map((option) => option.label);
-		const choice = await ctx.ui.select(`Write to file?\n\n  ${toolName}  ${path}`, labels);
+		const labels = options.map((option) => option.label);
+		const choice = await ctx.ui.select(`${title}\n\n  ${subject}`, labels);
 		const index = choice === undefined ? -1 : labels.indexOf(choice);
-		return index === -1 ? undefined : { choice: WRITE_OPTIONS[index].id, message: "" };
+		return index === -1 ? undefined : { choice: options[index].id, message: "" };
 	}
 
-	return ctx.ui.custom<WriteVerdict | undefined>((tui, theme, keybindings, done) => {
+	return ctx.ui.custom<Verdict | undefined>((tui, theme, keybindings, done) => {
 		let selected = 0;
 		let editing = false;
 		let cached: string[] | undefined;
@@ -122,7 +146,7 @@ async function askApproval(
 				noMatch: (text) => theme.fg("warning", text),
 			},
 		});
-		editor.onSubmit = (value) => done({ choice: WRITE_OPTIONS[selected].id, message: value.trim() });
+		editor.onSubmit = (value) => done({ choice: options[selected].id, message: value.trim() });
 
 		function refresh(): void {
 			cached = undefined;
@@ -154,7 +178,7 @@ async function askApproval(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.down")) {
-				selected = Math.min(WRITE_OPTIONS.length - 1, selected + 1);
+				selected = Math.min(options.length - 1, selected + 1);
 				refresh();
 				return;
 			}
@@ -165,7 +189,7 @@ async function askApproval(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.confirm")) {
-				done({ choice: WRITE_OPTIONS[selected].id, message: "" });
+				done({ choice: options[selected].id, message: "" });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
@@ -180,14 +204,14 @@ async function askApproval(
 			const lineWidth = Math.max(1, width);
 			const lines = [
 				theme.fg("accent", "─".repeat(lineWidth)),
-				truncateToWidth(theme.fg("text", " Write to file?"), lineWidth, ""),
-				truncateToWidth(theme.fg("muted", ` ${toolName}  ${path}`), lineWidth, ""),
+				truncateToWidth(theme.fg("text", ` ${title}`), lineWidth, ""),
+				truncateToWidth(theme.fg("muted", ` ${subject}`), lineWidth, ""),
 				"",
 			];
-			for (let index = 0; index < WRITE_OPTIONS.length; index++) {
+			for (let index = 0; index < options.length; index++) {
 				const prefix = index === selected ? theme.fg("accent", " > ") : "   ";
 				const color = index === selected ? "accent" : "text";
-				const label = `${index + 1}. ${WRITE_OPTIONS[index].label}`;
+				const label = `${index + 1}. ${options[index].label}`;
 				lines.push(truncateToWidth(`${prefix}${theme.fg(color, label)}`, lineWidth, ""));
 			}
 			lines.push("");
@@ -218,51 +242,48 @@ async function askApproval(
 }
 
 export default function (pi: ExtensionAPI) {
-	let mode: WriteMode = "ask";
+	let mode: Mode = "paranoid";
 	const approvalNotes = new Map<string, { toolName: string; message: string }>();
 
 	function updateStatus(ctx: ExtensionContext): void {
-		ctx.ui.setStatus(
-			"confirm-writes",
-			mode === "auto" ? ctx.ui.theme.fg("warning", "writes: auto") : ctx.ui.theme.fg("dim", "writes: ask"),
-		);
+		ctx.ui.setStatus("confirm-writes", ctx.ui.theme.fg(MODE_COLOR[mode], MODE_LABEL[mode]));
 	}
 
-	function setMode(next: WriteMode, ctx: ExtensionContext): void {
+	function setMode(next: Mode, ctx: ExtensionContext): void {
 		mode = next;
+		pi.events.emit(MODE_EVENT, { mode });
 		updateStatus(ctx);
-		ctx.ui.notify(next === "auto" ? "Write approvals off this session" : "Write approvals on", "info");
+		ctx.ui.notify(`${MODE_LABEL[next]}: ${MODE_HINT[next]}`, "info");
 	}
 
 	pi.registerFlag("auto-edits", {
-		description: "Start with write/edit approvals off",
+		description: "Start the session in YOLO mode, without approvals",
 		type: "boolean",
 		default: false,
 	});
 
 	pi.registerCommand("edits", {
-		description: "Show or set the write/edit approval mode: /edits ask | auto",
+		description: "Show or set the approval mode: /edits paranoid | careful | yolo",
 		handler: async (args, ctx) => {
 			const next = args.trim().toLowerCase();
-			if (next === "ask" || next === "auto") {
+			if (isMode(next)) {
 				setMode(next, ctx);
 				return;
 			}
-			ctx.ui.notify(`Write approval mode: ${mode} (use /edits ask or /edits auto)`, "info");
+			ctx.ui.notify(`${MODE_LABEL[mode]}: ${MODE_HINT[mode]} (use /edits paranoid | careful | yolo)`, "info");
 		},
 	});
 
 	pi.registerShortcut("shift+tab", {
-		description: "Toggle write/edit approval mode",
+		description: "Cycle the approval mode",
 		handler: async (ctx) => {
-			setMode(mode === "auto" ? "ask" : "auto", ctx);
+			setMode(nextMode(mode), ctx);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (pi.getFlag("auto-edits") === true) {
-			mode = "auto";
-		}
+		mode = pi.getFlag("auto-edits") === true ? "yolo" : "paranoid";
+		pi.events.emit(MODE_EVENT, { mode });
 		approvalNotes.clear();
 		updateStatus(ctx);
 	});
@@ -282,16 +303,19 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "edit_lines") {
+		const { toolName } = event;
+		if (!needsApproval(mode, toolName)) {
 			return undefined;
 		}
 
-		const path = String(event.input.path ?? "");
-		if (!path || isAutoAllowed(path)) {
+		const isWrite = WRITE_TOOLS.has(toolName);
+		const path = isWrite ? String(event.input.path ?? "") : "";
+		// A write without a path fails inside the tool; prompting for it is noise.
+		if (isWrite && !path) {
 			return undefined;
 		}
-
-		if (mode === "auto") {
+		// Temp paths are scaffolding: CAREFUL writes there without prompting.
+		if (mode === "careful" && isWrite && isAutoAllowed(path)) {
 			return undefined;
 		}
 
@@ -302,22 +326,26 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		const title = isWrite ? "Write to file?" : "Run tool?";
+		const subject = isWrite ? `${toolName}  ${path}` : `${toolName}  ${callSubject(event.input)}`;
+		const allowAllLabel = isWrite ? "Yes, allow all writes this session" : "Yes, allow everything this session";
+
 		if (!ctx.hasUI) {
 			return {
 				block: true,
-				reason: `${event.toolName} to ${path} needs approval, but no UI is available`,
+				reason: `${subject} needs approval, but no UI is available`,
 			};
 		}
 
-		const decline = `The user declined this ${event.toolName} to ${path}. This is a deliberate rejection, not an error. Do not retry it unchanged.`;
-		const verdict = await askApproval(ctx, event.toolName, path);
+		const decline = `The user declined this ${toolName} call (${subject}). This is a deliberate rejection, not an error. Do not retry it unchanged.`;
+		const verdict = await askApproval(ctx, title, subject, allowAllLabel);
 		if (!verdict) {
 			return { block: true, terminate: true, reason: `${decline} Wait for the user's next instruction.` };
 		}
 
 		const { choice, message } = verdict;
 		if (choice === "allow-all") {
-			setMode("auto", ctx);
+			setMode("yolo", ctx);
 		}
 		if (choice !== "no") {
 			if (message) {
