@@ -20,7 +20,7 @@ Pi clones the repository and installs the `unbash` dependency.
 | `CAREFUL` | File writes (`write`, `edit`, `edit_lines`) |
 | `YOLO` | Nothing |
 
-The status bar shows the active mode in green, orange, or red. Start a session in YOLO with `--auto-edits`. Print and JSON modes have no dialog, so a call that needs approval is blocked: unattended runs need `--auto-edits`.
+The status bar shows the active mode on a green, orange, or red background. Start a session in YOLO with `--auto-edits`. Print and JSON modes have no dialog, so a call that needs approval is blocked: unattended runs need `--auto-edits`.
 
 ## Extensions
 

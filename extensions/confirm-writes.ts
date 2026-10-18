@@ -46,7 +46,7 @@ import type {
 	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { Editor, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { Editor, Key, colorToRgb, matchesKey, rgbColor, truncateToWidth } from "@earendil-works/pi-tui";
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 
@@ -56,6 +56,7 @@ import {
 	MODE_HINT,
 	MODE_LABEL,
 	WRITE_TOOLS,
+	contrastShade,
 	isMode,
 	needsApproval,
 	nextMode,
@@ -246,7 +247,14 @@ export default function (pi: ExtensionAPI) {
 	const approvalNotes = new Map<string, { toolName: string; message: string }>();
 
 	function updateStatus(ctx: ExtensionContext): void {
-		ctx.ui.setStatus("confirm-writes", ctx.ui.theme.fg(MODE_COLOR[mode], MODE_LABEL[mode]));
+		const theme = ctx.ui.theme;
+		const background = theme.colors[MODE_COLOR[mode]];
+		const { r, g, b } = colorToRgb(background);
+		const shade = contrastShade(r, g, b);
+		ctx.ui.setStatus(
+			"confirm-writes",
+			theme.style(MODE_LABEL[mode], { bg: background, fg: rgbColor(shade, shade, shade) }),
+		);
 	}
 
 	function setMode(next: Mode, ctx: ExtensionContext): void {

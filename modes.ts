@@ -56,3 +56,18 @@ export function needsApproval(mode: Mode, toolName: string): boolean {
 	}
 	return WRITE_TOOLS.has(toolName);
 }
+
+/** WCAG relative luminance of an 8-bit sRGB color, in 0..1. */
+export function relativeLuminance(r: number, g: number, b: number): number {
+	const channel = (value: number) => {
+		const srgb = value / 255;
+		return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** Text shade that contrasts with the background: 0 for black, 255 for white. */
+export function contrastShade(r: number, g: number, b: number): 0 | 255 {
+	// Black and white contrast equally at L = 0.179; below it, white reads better.
+	return relativeLuminance(r, g, b) > 0.179 ? 0 : 255;
+}
