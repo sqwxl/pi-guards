@@ -12,7 +12,7 @@ Pi clones the repository and installs the `unbash` dependency.
 
 ## Approval modes
 
-`confirm-writes` starts every session in PARANOID. Press shift+tab to cycle, or use `/edits`.
+`confirm-writes` starts every session in PARANOID. Press shift+tab to cycle, or use `/edits`. Shift+tab also works while an approval dialog is open.
 
 | Mode | Asks before |
 |---|---|

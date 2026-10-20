@@ -36,7 +36,9 @@
  * and resets to PARANOID on session start. The active mode is published on
  * `pi.events`, so `permission-gate` can stay silent when PARANOID already asks
  * about a bash call. shift+tab requires `app.thinking.cycle` to be unbound in
- * keybindings.json.
+ * keybindings.json. Pi dispatches registered shortcuts only through the main
+ * editor, so a terminal input listener cycles the mode while a dialog owns
+ * keyboard focus.
  */
 
 import type {
@@ -64,6 +66,7 @@ import {
 } from "../modes.ts";
 
 const ALLOWED_PREFIXES = ["/tmp/", "/private/tmp/", "/var/folders/"];
+const MODE_SHORTCUT = "shift+tab";
 
 function isAutoAllowed(path: string): boolean {
 	return ALLOWED_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -224,7 +227,7 @@ async function askApproval(
 				lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), lineWidth, ""));
 			} else {
 				const toolsKey = keybindings.getKeys("app.tools.expand")[0];
-				const hint = ` ↑↓ choose • Tab to add a message • Enter to confirm • Esc to cancel${toolsKey ? ` • ${toolsKey} toggle tool output` : ""}`;
+				const hint = ` ↑↓ choose • Tab message • Shift+Tab mode • Enter confirm • Esc cancel${toolsKey ? ` • ${toolsKey} output` : ""}`;
 				lines.push(truncateToWidth(theme.fg("dim", hint), lineWidth, ""));
 			}
 			lines.push(theme.fg("accent", "─".repeat(lineWidth)));
@@ -244,6 +247,7 @@ async function askApproval(
 
 export default function (pi: ExtensionAPI) {
 	let mode: Mode = "paranoid";
+	let removeInputListener: (() => void) | undefined;
 	const approvalNotes = new Map<string, { toolName: string; message: string }>();
 
 	function updateStatus(ctx: ExtensionContext): void {
@@ -264,6 +268,10 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(`${MODE_LABEL[next]}: ${MODE_HINT[next]}`, "info");
 	}
 
+	function cycleMode(ctx: ExtensionContext): void {
+		setMode(nextMode(mode), ctx);
+	}
+
 	pi.registerFlag("auto-edits", {
 		description: "Start the session in YOLO mode, without approvals",
 		type: "boolean",
@@ -282,10 +290,10 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerShortcut("shift+tab", {
+	pi.registerShortcut(MODE_SHORTCUT, {
 		description: "Cycle the approval mode",
 		handler: async (ctx) => {
-			setMode(nextMode(mode), ctx);
+			cycleMode(ctx);
 		},
 	});
 
@@ -294,6 +302,15 @@ export default function (pi: ExtensionAPI) {
 		pi.events.emit(MODE_EVENT, { mode });
 		approvalNotes.clear();
 		updateStatus(ctx);
+
+		removeInputListener?.();
+		removeInputListener = ctx.ui.onTerminalInput((data) => {
+			if (!matchesKey(data, MODE_SHORTCUT)) {
+				return undefined;
+			}
+			cycleMode(ctx);
+			return { consume: true };
+		});
 	});
 
 	pi.on("tool_result", async (event) => {
