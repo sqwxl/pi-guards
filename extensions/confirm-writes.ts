@@ -29,16 +29,17 @@
  * tool's result, on a rejection it is added to the block reason with
  * `terminate` omitted so the model can act on it in the same run.
  *
- * Three modes. PARANOID (the default) prompts for every tool call except file
- * reads, CAREFUL prompts for writes, YOLO writes without prompting. Cycle with
- * shift+tab, switch with /edits, or choose "allow everything this session" in
- * the prompt. `--auto-edits` starts a session in YOLO. The mode is per session
- * and resets to PARANOID on session start. The active mode is published on
- * `pi.events`, so `permission-gate` can stay silent when PARANOID already asks
- * about a bash call. shift+tab requires `app.thinking.cycle` to be unbound in
- * keybindings.json. Pi dispatches registered shortcuts only through the main
- * editor, so a terminal input listener cycles the mode while a dialog owns
- * keyboard focus.
+ * Three modes. CAREFUL (the default) prompts for writes, PARANOID prompts for
+ * every tool call except file reads, YOLO writes without prompting. Cycle with
+ * shift+tab or switch with /edits. In an approval dialog shift+tab takes the
+ * relax option: it approves the call and loosens the mode one step
+ * (PARANOID → CAREFUL → YOLO). `--auto-edits` starts a session in YOLO. The
+ * mode is per session and resets to CAREFUL on session start. The active mode
+ * is published on `pi.events`, so `permission-gate` can stay silent when
+ * PARANOID already asks about a bash call. shift+tab requires
+ * `app.thinking.cycle` to be unbound in keybindings.json. Pi dispatches
+ * registered shortcuts only through the main editor, so a terminal input
+ * listener handles shift+tab while a dialog owns keyboard focus.
  */
 
 import type {
@@ -53,6 +54,7 @@ import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 
 import {
+	DEFAULT_MODE,
 	MODE_COLOR,
 	MODE_EVENT,
 	MODE_HINT,
@@ -60,6 +62,7 @@ import {
 	WRITE_TOOLS,
 	contrastShade,
 	isMode,
+	loosen,
 	needsApproval,
 	nextMode,
 	type Mode,
@@ -99,7 +102,7 @@ async function editFailure(input: EditToolInput, ctx: ExtensionContext): Promise
 	}
 }
 
-type Verdict = { choice: "yes" | "allow-all" | "no"; message: string };
+type Verdict = { choice: "yes" | "relax" | "no"; message: string };
 
 /** One-line description of a tool call for the prompt and the rejection reason. */
 function callSubject(input: unknown): string {
@@ -111,34 +114,48 @@ function callSubject(input: unknown): string {
 	return flat.length > 160 ? `${flat.slice(0, 159)}…` : flat;
 }
 
+/** Takes the relax option of the open approval prompt; set only while a dialog is open. */
+let relaxPrompt: (() => void) | undefined;
+
 /**
  * Ask for a decision with an optional message. Tab opens the inline editor;
- * Enter submits the highlighted choice together with the message. Outside the
- * TUI the built-in selector is used and the message is omitted.
+ * Enter submits the highlighted choice together with the message. Shift+Tab
+ * takes the relax option through `relaxPrompt`. Outside the TUI the built-in
+ * selector is used and the message is omitted.
  */
 async function askApproval(
 	ctx: ExtensionContext,
 	title: string,
 	subject: string,
-	allowAllLabel: string,
+	relaxLabel: () => string,
 ): Promise<Verdict | undefined> {
-	const options: ReadonlyArray<{ id: Verdict["choice"]; label: string }> = [
+	const options = (): ReadonlyArray<{ id: Verdict["choice"]; label: string }> => [
 		{ id: "yes", label: "Yes" },
-		{ id: "allow-all", label: allowAllLabel },
+		{ id: "relax", label: relaxLabel() },
 		{ id: "no", label: "No" },
 	];
 
 	if (ctx.mode !== "tui") {
-		const labels = options.map((option) => option.label);
+		const labels = options().map((option) => option.label);
 		const choice = await ctx.ui.select(`${title}\n\n  ${subject}`, labels);
 		const index = choice === undefined ? -1 : labels.indexOf(choice);
-		return index === -1 ? undefined : { choice: options[index].id, message: "" };
+		return index === -1 ? undefined : { choice: options()[index].id, message: "" };
 	}
 
 	return ctx.ui.custom<Verdict | undefined>((tui, theme, keybindings, done) => {
 		let selected = 0;
 		let editing = false;
 		let cached: string[] | undefined;
+		let settled = false;
+
+		function settle(verdict: Verdict | undefined): void {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			relaxPrompt = undefined;
+			done(verdict);
+		}
 
 		const editor = new Editor(tui, {
 			borderColor: (text) => theme.fg("accent", text),
@@ -150,7 +167,9 @@ async function askApproval(
 				noMatch: (text) => theme.fg("warning", text),
 			},
 		});
-		editor.onSubmit = (value) => done({ choice: options[selected].id, message: value.trim() });
+		editor.onSubmit = (value) => settle({ choice: options()[selected].id, message: value.trim() });
+		// The session input listener sees Shift+Tab before this dialog does.
+		relaxPrompt = () => settle({ choice: "relax", message: editor.getText().trim() });
 
 		function refresh(): void {
 			cached = undefined;
@@ -182,7 +201,7 @@ async function askApproval(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.down")) {
-				selected = Math.min(options.length - 1, selected + 1);
+				selected = Math.min(options().length - 1, selected + 1);
 				refresh();
 				return;
 			}
@@ -193,11 +212,11 @@ async function askApproval(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.confirm")) {
-				done({ choice: options[selected].id, message: "" });
+				settle({ choice: options()[selected].id, message: "" });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
-				done(undefined);
+				settle(undefined);
 			}
 		}
 
@@ -212,10 +231,11 @@ async function askApproval(
 				truncateToWidth(theme.fg("muted", ` ${subject}`), lineWidth, ""),
 				"",
 			];
-			for (let index = 0; index < options.length; index++) {
+			const rows = options();
+			for (let index = 0; index < rows.length; index++) {
 				const prefix = index === selected ? theme.fg("accent", " > ") : "   ";
 				const color = index === selected ? "accent" : "text";
-				const label = `${index + 1}. ${options[index].label}`;
+				const label = `${index + 1}. ${rows[index].label}`;
 				lines.push(truncateToWidth(`${prefix}${theme.fg(color, label)}`, lineWidth, ""));
 			}
 			lines.push("");
@@ -227,7 +247,7 @@ async function askApproval(
 				lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), lineWidth, ""));
 			} else {
 				const toolsKey = keybindings.getKeys("app.tools.expand")[0];
-				const hint = ` ↑↓ choose • Tab message • Shift+Tab mode • Enter confirm • Esc cancel${toolsKey ? ` • ${toolsKey} output` : ""}`;
+				const hint = ` ↑↓ choose • Tab message • Shift+Tab relax • Enter confirm • Esc cancel${toolsKey ? ` • ${toolsKey} output` : ""}`;
 				lines.push(truncateToWidth(theme.fg("dim", hint), lineWidth, ""));
 			}
 			lines.push(theme.fg("accent", "─".repeat(lineWidth)));
@@ -246,7 +266,7 @@ async function askApproval(
 }
 
 export default function (pi: ExtensionAPI) {
-	let mode: Mode = "paranoid";
+	let mode: Mode = DEFAULT_MODE;
 	let removeInputListener: (() => void) | undefined;
 	const approvalNotes = new Map<string, { toolName: string; message: string }>();
 
@@ -298,7 +318,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		mode = pi.getFlag("auto-edits") === true ? "yolo" : "paranoid";
+		mode = pi.getFlag("auto-edits") === true ? "yolo" : DEFAULT_MODE;
 		pi.events.emit(MODE_EVENT, { mode });
 		approvalNotes.clear();
 		updateStatus(ctx);
@@ -307,6 +327,11 @@ export default function (pi: ExtensionAPI) {
 		removeInputListener = ctx.ui.onTerminalInput((data) => {
 			if (!matchesKey(data, MODE_SHORTCUT)) {
 				return undefined;
+			}
+			// While an approval dialog is open, Shift+Tab takes its relax option.
+			if (relaxPrompt) {
+				relaxPrompt();
+				return { consume: true };
 			}
 			cycleMode(ctx);
 			return { consume: true };
@@ -353,7 +378,8 @@ export default function (pi: ExtensionAPI) {
 
 		const title = isWrite ? "Write to file?" : "Run tool?";
 		const subject = isWrite ? `${toolName}  ${path}` : `${toolName}  ${callSubject(event.input)}`;
-		const allowAllLabel = isWrite ? "Yes, allow all writes this session" : "Yes, allow everything this session";
+		const relaxLabel = () =>
+			loosen(mode) === "yolo" ? "Yes, allow everything this session" : "Yes, allow all writes this session";
 
 		if (!ctx.hasUI) {
 			return {
@@ -363,14 +389,14 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const decline = `The user declined this ${toolName} call (${subject}). This is a deliberate rejection, not an error. Do not retry it unchanged.`;
-		const verdict = await askApproval(ctx, title, subject, allowAllLabel);
+		const verdict = await askApproval(ctx, title, subject, relaxLabel);
 		if (!verdict) {
 			return { block: true, terminate: true, reason: `${decline} Wait for the user's next instruction.` };
 		}
 
 		const { choice, message } = verdict;
-		if (choice === "allow-all") {
-			setMode("yolo", ctx);
+		if (choice === "relax") {
+			setMode(loosen(mode), ctx);
 		}
 		if (choice !== "no") {
 			if (message) {

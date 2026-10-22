@@ -5,6 +5,7 @@ import {
 	MODES,
 	contrastShade,
 	isMode,
+	loosen,
 	needsApproval,
 	nextMode,
 	relativeLuminance,
@@ -22,6 +23,7 @@ function check(name, actual, expected) {
 }
 
 check("cycle order", MODES.map((mode) => nextMode(mode)), ["careful", "yolo", "paranoid"]);
+check("loosen order", MODES.map((mode) => loosen(mode)), ["careful", "yolo", "yolo"]);
 check("labels", MODES.map((mode) => MODE_LABEL[mode]), ["PARANOID", "CAREFUL", "YOLO"]);
 check("colors", MODES.map((mode) => MODE_COLOR[mode]), ["success", "warning", "error"]);
 check("has a hint for every mode", MODES.every((mode) => Boolean(MODE_HINT[mode])), true);

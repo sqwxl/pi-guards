@@ -11,6 +11,9 @@ export type Mode = "paranoid" | "careful" | "yolo";
 
 export const MODES: readonly Mode[] = ["paranoid", "careful", "yolo"];
 
+/** Mode at session start, unless `--auto-edits` asks for YOLO. */
+export const DEFAULT_MODE: Mode = "careful";
+
 /** Event name that carries the active mode to the other extensions. */
 export const MODE_EVENT = "guards:mode";
 
@@ -45,6 +48,11 @@ export function isMode(value: string): value is Mode {
 
 export function nextMode(mode: Mode): Mode {
 	return MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+}
+
+/** One step looser: paranoid → careful → yolo. YOLO stays YOLO. */
+export function loosen(mode: Mode): Mode {
+	return MODES[Math.min(MODES.indexOf(mode) + 1, MODES.length - 1)];
 }
 
 export function needsApproval(mode: Mode, toolName: string): boolean {
