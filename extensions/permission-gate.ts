@@ -5,6 +5,10 @@
  * commands via the bash tool. Blocks by default when there's no UI
  * (print/json modes).
  *
+ * Commands that kill by pattern (`pkill`, `killall`, `kill $(pgrep ...)`,
+ * `pgrep ... | xargs kill`) are treated as dangerous by the same parser that
+ * finds file writes.
+ *
  * Bash commands that write files are refused before they run. In-place
  * editors, interpreter programs that call write functions, and text producers
  * redirected into a file bypass the edit/write approval, so the model is
@@ -27,8 +31,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { findBashFileEdit } from "../bash-guard/guard.ts";
-import { MODE_EVENT, isMode, type Mode } from "../modes.ts";
+import { findBashFileEdit, findMassKill } from "../bash-guard/guard.ts";
+import { MODE_EVENT, isMode, singleLine, type Mode } from "../modes.ts";
 
 const dangerousPatterns = [
 	/\brm\s+(-[a-z]*[rf][a-z]*\s+)?(?:--recursive|--force|\/|~|\*)/i, // rm -rf on paths
@@ -64,13 +68,15 @@ export default function (pi: ExtensionAPI) {
 				reason: `Blocked: ${fileEdit}. Use the edit or write tool instead. If a script is needed, create it with the write tool first.`,
 			};
 		}
-		if (!dangerousPatterns.some((p) => p.test(command))) return undefined;
+		const massKill = findMassKill(command);
+		if (!massKill && !dangerousPatterns.some((p) => p.test(command))) return undefined;
 
 		if (!ctx.hasUI) {
 			return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };
 		}
 
-		const choice = await ctx.ui.select(`⚠️ Dangerous command:\n\n  ${command}\n\nAllow?`, ["Yes", "No"]);
+		const warning = massKill ? `⚠️ Dangerous command: ${massKill}` : "⚠️ Dangerous command";
+		const choice = await ctx.ui.select(`${warning}\n\n  ${singleLine(command)}\n\nAllow?`, ["Yes", "No"]);
 		if (choice !== "Yes") {
 			return {
 				block: true,

@@ -34,9 +34,11 @@
  * shift+tab or switch with /edits. In an approval dialog shift+tab takes the
  * relax option: it approves the call and loosens the mode one step
  * (PARANOID → CAREFUL → YOLO). `--auto-edits` starts a session in YOLO. The
- * mode is per session and resets to CAREFUL on session start. The active mode
- * is published on `pi.events`, so `permission-gate` can stay silent when
- * PARANOID already asks about a bash call. shift+tab requires
+ * mode is stored as a `guards-mode` session entry, so a resumed session keeps
+ * the last mode; a session without one starts in CAREFUL. YOLO disables only
+ * these write approvals: `permission-gate` still checks destructive bash. The
+ * active mode is published on `pi.events`, so `permission-gate` can stay silent
+ * when PARANOID already asks about a bash call. shift+tab requires
  * `app.thinking.cycle` to be unbound in keybindings.json. Pi dispatches
  * registered shortcuts only through the main editor, so a terminal input
  * listener handles shift+tab while a dialog owns keyboard focus.
@@ -56,24 +58,23 @@ import { access, readFile } from "node:fs/promises";
 import {
 	DEFAULT_MODE,
 	MODE_COLOR,
+	MODE_ENTRY,
 	MODE_EVENT,
 	MODE_HINT,
 	MODE_LABEL,
 	WRITE_TOOLS,
 	contrastShade,
 	isMode,
+	lastMode,
 	loosen,
 	needsApproval,
 	nextMode,
+	singleLine,
 	type Mode,
 } from "../modes.ts";
+import { isScratchPath } from "../paths.ts";
 
-const ALLOWED_PREFIXES = ["/tmp/", "/private/tmp/", "/var/folders/"];
 const MODE_SHORTCUT = "shift+tab";
-
-function isAutoAllowed(path: string): boolean {
-	return ALLOWED_PREFIXES.some((prefix) => path.startsWith(prefix));
-}
 
 /** The built-in edit tool with writes disabled: reports whether the call could apply, without touching the file. */
 const dryRunEdit = createEditToolDefinition(process.cwd(), {
@@ -110,7 +111,7 @@ function callSubject(input: unknown): string {
 		typeof input === "object" && input !== null && "command" in input
 			? String((input as { command: unknown }).command)
 			: (JSON.stringify(input) ?? "");
-	const flat = raw.replace(/\s+/g, " ").trim();
+	const flat = singleLine(raw);
 	return flat.length > 160 ? `${flat.slice(0, 159)}…` : flat;
 }
 
@@ -195,6 +196,11 @@ async function askApproval(
 				return;
 			}
 
+			const picked = data.length === 1 ? Number(data) : Number.NaN;
+			if (picked >= 1 && picked <= options().length) {
+				settle({ choice: options()[picked - 1].id, message: "" });
+				return;
+			}
 			if (keybindings.matches(data, "tui.select.up")) {
 				selected = Math.max(0, selected - 1);
 				refresh();
@@ -283,6 +289,7 @@ export default function (pi: ExtensionAPI) {
 
 	function setMode(next: Mode, ctx: ExtensionContext): void {
 		mode = next;
+		pi.appendEntry(MODE_ENTRY, { mode });
 		pi.events.emit(MODE_EVENT, { mode });
 		updateStatus(ctx);
 		ctx.ui.notify(`${MODE_LABEL[next]}: ${MODE_HINT[next]}`, "info");
@@ -293,7 +300,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.registerFlag("auto-edits", {
-		description: "Start the session in YOLO mode, without approvals",
+		description: "Start the session in YOLO mode, without write approvals",
 		type: "boolean",
 		default: false,
 	});
@@ -318,7 +325,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		mode = pi.getFlag("auto-edits") === true ? "yolo" : DEFAULT_MODE;
+		relaxPrompt = undefined;
+		mode = pi.getFlag("auto-edits") === true ? "yolo" : (lastMode(ctx.sessionManager.getBranch()) ?? DEFAULT_MODE);
 		pi.events.emit(MODE_EVENT, { mode });
 		approvalNotes.clear();
 		updateStatus(ctx);
@@ -336,6 +344,13 @@ export default function (pi: ExtensionAPI) {
 			cycleMode(ctx);
 			return { consume: true };
 		});
+	});
+
+	pi.on("session_shutdown", async () => {
+		relaxPrompt = undefined;
+		approvalNotes.clear();
+		removeInputListener?.();
+		removeInputListener = undefined;
 	});
 
 	pi.on("tool_result", async (event) => {
@@ -365,7 +380,7 @@ export default function (pi: ExtensionAPI) {
 			return undefined;
 		}
 		// Temp paths are scaffolding: CAREFUL writes there without prompting.
-		if (mode === "careful" && isWrite && isAutoAllowed(path)) {
+		if (mode === "careful" && isWrite && isScratchPath(path, ctx.cwd)) {
 			return undefined;
 		}
 
@@ -377,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const title = isWrite ? "Write to file?" : "Run tool?";
-		const subject = isWrite ? `${toolName}  ${path}` : `${toolName}  ${callSubject(event.input)}`;
+		const subject = isWrite ? `${toolName}  ${singleLine(path)}` : `${toolName}  ${callSubject(event.input)}`;
 		const relaxLabel = () =>
 			loosen(mode) === "yolo" ? "Yes, allow everything this session" : "Yes, allow all writes this session";
 

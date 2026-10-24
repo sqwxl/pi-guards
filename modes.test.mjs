@@ -1,13 +1,16 @@
 import {
 	MODE_COLOR,
+	MODE_ENTRY,
 	MODE_HINT,
 	MODE_LABEL,
 	MODES,
 	contrastShade,
 	isMode,
+	lastMode,
 	loosen,
 	needsApproval,
 	nextMode,
+	singleLine,
 	relativeLuminance,
 } from "./modes.ts";
 
@@ -29,6 +32,22 @@ check("colors", MODES.map((mode) => MODE_COLOR[mode]), ["success", "warning", "e
 check("has a hint for every mode", MODES.every((mode) => Boolean(MODE_HINT[mode])), true);
 check("accepts mode names", MODES.map(isMode), [true, true, true]);
 check("rejects other names", ["ask", "auto", "PARANOID", ""].map(isMode), [false, false, false, false]);
+
+check("prompt text keeps words", singleLine("cat > f"), "cat > f");
+check("prompt text drops newlines", singleLine("a\nb"), "a b");
+check("prompt text drops tabs", singleLine("a\t\tb"), "a b");
+check("prompt text drops escapes", singleLine("a\x1b[31mb"), "a [31mb");
+check("prompt text drops NUL", singleLine("a\x00b"), "a b");
+check("prompt text drops C1", singleLine("a\x9bb"), "a b");
+check("prompt text trims", singleLine("  a  "), "a");
+check("prompt text keeps unicode", singleLine("café"), "café");
+
+const custom = (data) => ({ type: "custom", customType: MODE_ENTRY, data });
+check("no stored mode", lastMode([]), undefined);
+check("ignores other entries", lastMode([{ type: "message" }, { ...custom({ mode: "yolo" }), customType: "other" }]), undefined);
+check("restores the stored mode", lastMode([custom({ mode: "yolo" })]), "yolo");
+check("last entry wins", lastMode([custom({ mode: "yolo" }), custom({ mode: "paranoid" })]), "paranoid");
+check("skips unknown modes", lastMode([custom({ mode: "yolo" }), custom({ mode: "ask" })]), "yolo");
 
 for (const tool of ["read", "ls", "grep", "find"]) {
 	check(`paranoid reads ${tool}`, needsApproval("paranoid", tool), false);
