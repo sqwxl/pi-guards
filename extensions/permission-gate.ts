@@ -7,7 +7,8 @@
  *
  * Commands that kill by pattern (`pkill`, `killall`, `kill $(pgrep ...)`,
  * `pgrep ... | xargs kill`) are treated as dangerous by the same parser that
- * finds file writes.
+ * finds file writes. Deletion commands (`rm`, `unlink`, `rmdir`, `git rm`)
+ * ask for approval unless every target is inside a scratch root.
  *
  * Bash commands that write files are refused before they run. In-place
  * editors, interpreter programs that call write functions, and text producers
@@ -31,7 +32,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { findBashFileEdit, findMassKill } from "../bash-guard/guard.ts";
+import { findBashDeletion, findBashFileEdit, findMassKill } from "../bash-guard/guard.ts";
 import { isDangerousCommand } from "../dangerous-commands.ts";
 import { MODE_EVENT, isMode, singleLine, type Mode } from "../modes.ts";
 
@@ -61,14 +62,15 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 		const massKill = findMassKill(command);
-		if (!massKill && !isDangerousCommand(command)) return undefined;
+		const deletion = findBashDeletion(command, ctx.cwd);
+		if (!massKill && !deletion && !isDangerousCommand(command)) return undefined;
 
 		if (!ctx.hasUI) {
 			return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };
 		}
 
-		const warning = massKill ? `⚠️ Dangerous command: ${massKill}` : "⚠️ Dangerous command";
-		const choice = await ctx.ui.select(`${warning}\n\n  ${singleLine(command)}\n\nAllow?`, ["Yes", "No"]);
+		const warning = massKill ?? deletion ?? "Dangerous command";
+		const choice = await ctx.ui.select(`⚠️ ${warning}\n\n  ${singleLine(command)}\n\nAllow?`, ["Yes", "No"]);
 		if (choice !== "Yes") {
 			return {
 				block: true,

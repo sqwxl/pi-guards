@@ -25,7 +25,7 @@
 		"LICENSE"
 	],
 	"scripts": {
-		"test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/kill.test.mjs"
+		"test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs"
 	},
 	"pi": {
 		"extensions": [

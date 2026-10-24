@@ -17,6 +17,8 @@ type AstNode = {
 
 type Check = (node: AstNode, raw: string) => string | undefined;
 
+import { isInsideScratch } from "../paths.ts";
+
 const SCRATCH = /^\/(?:dev|tmp|private\/tmp|var\/folders)(?:\/|$)/;
 const DYNAMIC = /[$`]/;
 const WRITE_REDIRECTS = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
@@ -29,6 +31,7 @@ const INTERPRETER = /^(?:python\d*(?:\.\d+)*|pypy\d*|node(?:js)?|ruby|perl|php|b
 const CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print"]);
 const GIT_APPLY_READ_ONLY = new Set(["--check", "--stat", "--numstat", "--summary"]);
 const PATTERN_KILLERS = new Set(["pkill", "killall"]);
+const DELETERS = new Set(["rm", "unlink", "rmdir"]);
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "ps", "lsof"]);
 const LISTENER_ONLY = /^(?:-s)?TCP:LISTEN$/;
 
@@ -83,6 +86,11 @@ export function findBashFileEdit(command: string): string | undefined {
 /** True when the command kills processes picked by a pattern or a broad lookup rather than by explicit PID. */
 export function findMassKill(command: string): string | undefined {
 	return findInScript(command, 0, checkMassKill);
+}
+
+/** Deletion of a path outside the scratch roots, or of a path that cannot be resolved. */
+export function findBashDeletion(command: string, cwd: string): string | undefined {
+	return findInScript(command, 0, (node) => checkDeletion(node, cwd));
 }
 
 function findInScript(source: string, depth: number, check: Check): string | undefined {
@@ -190,6 +198,54 @@ function checkMassKill(node: AstNode): string | undefined {
 	}
 	const lookup = targets.map((target) => walk(target, "", 0, broadPidLookup)).find((found) => found !== undefined);
 	return lookup ? `'kill $(${lookup} ...)' kills every process the lookup matches` : undefined;
+}
+
+function checkDeletion(node: AstNode, cwd: string): string | undefined {
+	if (node.type !== "Command") {
+		return undefined;
+	}
+	const resolved = resolveWrapped(commandWords(node));
+	if (!resolved) {
+		return undefined;
+	}
+	const { base, args } = resolved;
+	const targets = DELETERS.has(base)
+		? deletionTargets(args)
+		: base === "git" && nodeValue(args[0]) === "rm"
+			? deletionTargets(args.slice(1))
+			: undefined;
+	if (targets === undefined) {
+		return undefined;
+	}
+	const unresolved =
+		targets.length === 0 ||
+		targets.some((target) => {
+			const value = nodeValue(target);
+			return value === undefined || !isInsideScratch(value, cwd);
+		});
+	if (!unresolved) {
+		return undefined;
+	}
+	const shown = targets.map((target) => nodeValue(target) ?? "a dynamic path").join(" ");
+	return `'${base}${base === "git" ? " rm" : ""}' deletes ${shown || "files it cannot resolve"}`;
+}
+
+/** Positional arguments, skipping options until `--`. */
+function deletionTargets(args: AstNode[]): AstNode[] {
+	const targets: AstNode[] = [];
+	let options = true;
+	for (const arg of args) {
+		const value = nodeValue(arg);
+		if (options && value === "--") {
+			options = false;
+			continue;
+		}
+		if (options && value !== undefined && value.startsWith("-") && value.length > 1) {
+			continue;
+		}
+		targets.push(arg);
+	}
+	return targets;
 }
 
 function checkKillPipeline(pipeline: AstNode): string | undefined {

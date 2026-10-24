@@ -7,10 +7,6 @@
  */
 
 const PATTERNS = [
-	// rm that removes recursively or forcibly, whatever the target
-	/\brm\s+(?:-[a-z]*[rf][a-z]*|--(?:recursive|force)\b)/i,
-	// ... and rm aimed at a root, home, or every entry
-	/\brm\s+(-[a-z]*[rf][a-z]*\s+)?(?:--recursive|--force|\/|~|\*)/i,
 	// text from the network piped into a shell or an interpreter
 	/\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:[\w./-]*\/)?(?:ba|z|da|k|a)?sh\b/i,
 	/\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:[\w./-]*\/)?(?:python\d*|node|perl|ruby|php|deno|bun)\b/i,

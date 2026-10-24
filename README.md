@@ -32,10 +32,11 @@ The status bar shows the active mode on a green, orange, or red background. Star
 
 These guards are advisory. They are heuristic checks in the Pi process, not a sandbox, and they do not stop a determined command. Use an operating-system or container boundary when you need real isolation.
 
-- CAREFUL approves writes under `/tmp`, `/private/tmp`, and `/var/folders` without a prompt. The check resolves the path, so `..` cannot leave those roots. Symlinks are not resolved: a link inside a temporary directory can point outside it, and a write through that link skips approval.
+- CAREFUL approves writes under `/tmp`, `/private/tmp`, and `/var/folders` without a prompt. The check resolves the path, so `..` cannot leave those roots. Symlinks are not resolved: a link inside a temporary directory can point outside it, and a write or deletion through that link skips approval.
 - `permission-gate` detects bash file writes with `unbash` and a set of known commands. Redirections from commands it does not model, in-place editors it does not know, and obfuscated commands can pass without a prompt.
+- Deletions (`rm`, `unlink`, `rmdir`, `git rm`) ask for approval in CAREFUL and YOLO unless every target is inside a scratch root. The scratch roots themselves are not exempt. `find -delete` and `shred` always ask.
 - The write gate covers `write`, `edit`, and `edit_lines`. Other tools that can change files, such as MCP tools or custom tools, are not gated in CAREFUL.
-- Destructive-command checks are text patterns. They also match a command that only mentions a destructive shape in an argument, such as `grep 'rm -rf'`. Expect a prompt, not silence.
+- Destructive-command checks are text patterns. They also match a command that only mentions a destructive shape in an argument, such as `rg 'git reset --hard' docs/`. Expect a prompt, not silence.
 - The approval dialog shows one line per call. A long command is truncated to 160 characters, so check the full tool call in the transcript when a command is cut off.
 - The `powershell` tool is not analyzed. PARANOID asks for it; CAREFUL does not. On native Windows, keep the `bash` tool when you need the write gate.
 - Control characters in tool arguments are replaced with spaces before display. They never reach the terminal through the dialog.
@@ -45,12 +46,12 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 | Extension | Behavior |
 |---|---|
 | `extensions/confirm-writes.ts` | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call. |
-| `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
+| `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
 | `extensions/thinking-step.ts` | Show the reasoning step while the model works. |
 
 ## bash-guard
 
-`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes and mass kills. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
+`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes, deletions, and mass kills. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
 
 ## Tests
 
