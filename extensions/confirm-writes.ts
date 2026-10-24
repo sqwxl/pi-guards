@@ -29,6 +29,15 @@
  * tool's result, on a rejection it is added to the block reason with
  * `terminate` omitted so the model can act on it in the same run.
  *
+ * The prompt shows the payload of the call it asks about, because a batch renders
+ * every call preview before the first approval and the transcript follows its
+ * end: the pending call is the earliest block, which is off screen. Edits show
+ * the diff the chat would render, writes the highlighted content, bash the full
+ * command. A payload longer than the prompt scrolls with PgUp/PgDn, Home/End, or
+ * the wheel while the choices stay pinned. The prompt is an overlay: the editor
+ * dock would squeeze the transcript to one row, and the fullscreen viewport
+ * consumes PgUp/PgDn before a dock component sees them.
+ *
  * Three modes. CAREFUL (the default) prompts for writes, PARANOID prompts for
  * every tool call except file reads, YOLO writes without prompting. Cycle with
  * shift+tab or switch with /edits. In an approval dialog shift+tab takes the
@@ -45,13 +54,32 @@
  */
 
 import type {
+	EditToolDetails,
 	EditToolInput,
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionToolContext,
+	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { createEditToolDefinition, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { Editor, Key, colorToRgb, matchesKey, rgbColor, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	createEditToolDefinition,
+	getLanguageFromPath,
+	highlightCode,
+	isToolCallEventType,
+	renderDiff,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Editor,
+	Key,
+	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	colorToRgb,
+	matchesKey,
+	rgbColor,
+	truncateToWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 
@@ -76,6 +104,39 @@ import { isScratchPath } from "../paths.ts";
 
 const MODE_SHORTCUT = "shift+tab";
 
+/** Shape of the renderer's layout boxes; only the fields the prompt reads. */
+type LayoutBoxShape = { rect: { y: number }; children: LayoutBoxShape[] };
+
+/** Rows the prompt reserves for its frame, the subject, the choices and the hint. */
+const PROMPT_CHROME_ROWS = 12;
+/** Smallest payload window worth showing. */
+const PREVIEW_MIN_ROWS = 4;
+/**
+ * Rows between the editor's bottom border and the terminal bottom, read from the
+ * layout frame the renderer used. The dock is the last child of the root, and the
+ * footer is the last child of the dock, so the footer's top row is where the
+ * prompt must end.
+ */
+function footerRows(tui: TUI, rows: number): number | undefined {
+	const frame = (tui as TUI & { currentLayout?: { root?: LayoutBoxShape } }).currentLayout;
+	const dock = frame?.root?.children.at(-1);
+	const footer = dock?.children.at(-1);
+	if (!footer) {
+		return undefined;
+	}
+	return Math.max(0, rows - footer.rect.y);
+}
+
+/** Rows the prompt may occupy: everything above the editor's bottom border. */
+function promptHeight(rows: number, footer: number | undefined): number {
+	return Math.max(PROMPT_CHROME_ROWS + PREVIEW_MIN_ROWS, rows - (footer ?? 0));
+}
+
+/** Rows of payload the prompt shows at once. */
+function previewHeight(rows: number, footer: number | undefined): number {
+	return Math.max(PREVIEW_MIN_ROWS, promptHeight(rows, footer) - PROMPT_CHROME_ROWS);
+}
+
 /** The built-in edit tool with writes disabled: reports whether the call could apply, without touching the file. */
 const dryRunEdit = createEditToolDefinition(process.cwd(), {
 	operations: {
@@ -85,8 +146,10 @@ const dryRunEdit = createEditToolDefinition(process.cwd(), {
 	},
 });
 
-/** The error the real `edit` call would fail with, or undefined when it would apply. */
-async function editFailure(input: EditToolInput, ctx: ExtensionContext): Promise<string | undefined> {
+/** Either the error the real `edit` call would fail with, or the diff it would apply. */
+type DryRun = { failure: string } | { diff: string };
+
+async function editDryRun(input: EditToolInput, ctx: ExtensionContext): Promise<DryRun> {
 	// `execute` reads only `cwd`; the tool-running fields have no job in a dry run.
 	const toolContext: ExtensionToolContext = {
 		...ctx,
@@ -96,11 +159,43 @@ async function editFailure(input: EditToolInput, ctx: ExtensionContext): Promise
 		},
 	};
 	try {
-		await dryRunEdit.execute("dry-run", input, undefined, undefined, toolContext);
-		return undefined;
+		const result = await dryRunEdit.execute("dry-run", input, undefined, undefined, toolContext);
+		const details = result.details as EditToolDetails | undefined;
+		return { diff: details?.diff ?? "" };
 	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
+		return { failure: error instanceof Error ? error.message : String(error) };
 	}
+}
+
+/**
+ * Payload lines for the prompt, in the form the chat renders them: the edit diff,
+ * the highlighted write content, or the full command. Nothing is truncated here;
+ * the prompt wraps and windows these lines.
+ */
+function payloadLines(toolName: string, input: unknown, diff: string, theme: Theme): string[] {
+	if (diff) {
+		return renderDiff(diff).split("\n");
+	}
+	const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+	if (toolName === "write") {
+		return highlightCode(String(record.content ?? ""), getLanguageFromPath(String(record.path ?? "")));
+	}
+	if (toolName === "bash") {
+		return [theme.fg("toolTitle", theme.bold(`$ ${String(record.command ?? "")}`))];
+	}
+	// `edit_lines` and other replacement-shaped inputs have no computed diff to show.
+	const edits = Array.isArray(record.edits) ? record.edits : [record];
+	const lines: string[] = [];
+	for (const edit of edits) {
+		const fields = typeof edit === "object" && edit !== null ? (edit as Record<string, unknown>) : {};
+		for (const line of String(fields.oldText ?? "").split("\n")) {
+			lines.push(theme.fg("toolDiffRemoved", `- ${line}`));
+		}
+		for (const line of String(fields.newText ?? "").split("\n")) {
+			lines.push(theme.fg("toolDiffAdded", `+ ${line}`));
+		}
+	}
+	return lines;
 }
 
 type Verdict = { choice: "yes" | "relax" | "no"; message: string };
@@ -128,6 +223,7 @@ async function askApproval(
 	ctx: ExtensionContext,
 	title: string,
 	subject: string,
+	payload: string[],
 	relaxLabel: () => string,
 ): Promise<Verdict | undefined> {
 	const options = (): ReadonlyArray<{ id: Verdict["choice"]; label: string }> => [
@@ -143,137 +239,219 @@ async function askApproval(
 		return index === -1 ? undefined : { choice: options()[index].id, message: "" };
 	}
 
-	return ctx.ui.custom<Verdict | undefined>((tui, theme, keybindings, done) => {
-		let selected = 0;
-		let editing = false;
-		let cached: string[] | undefined;
-		let settled = false;
+	let terminalRows = (): number => 0;
+	let terminalColumns = (): number => 0;
+	let terminalFooter = (): number | undefined => undefined;
 
-		function settle(verdict: Verdict | undefined): void {
-			if (settled) {
-				return;
+	return ctx.ui.custom<Verdict | undefined>(
+		(tui, theme, keybindings, done) => {
+			const footer = footerRows(tui, tui.terminal.rows);
+			terminalRows = () => tui.terminal.rows;
+			terminalColumns = () => tui.terminal.columns;
+			terminalFooter = () => footer;
+			let selected = 0;
+			let editing = false;
+			let scroll = 0;
+			let scrollRange = 0;
+			let windowRows = PREVIEW_MIN_ROWS;
+			let cached: string[] | undefined;
+			let cachedKey = "";
+			let settled = false;
+
+			function settle(verdict: Verdict | undefined): void {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				relaxPrompt = undefined;
+				done(verdict);
 			}
-			settled = true;
-			relaxPrompt = undefined;
-			done(verdict);
-		}
 
-		const editor = new Editor(tui, {
-			borderColor: (text) => theme.fg("accent", text),
-			selectList: {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			},
-		});
-		editor.onSubmit = (value) => settle({ choice: options()[selected].id, message: value.trim() });
-		// The session input listener sees Shift+Tab before this dialog does.
-		// A message is being typed: Shift+Tab must not approve the call under it.
-		relaxPrompt = () => {
-			if (!editing) {
-				settle({ choice: "relax", message: editor.getText().trim() });
+			const editor = new Editor(tui, {
+				borderColor: (text) => theme.fg("accent", text),
+				selectList: {
+					selectedPrefix: (text) => theme.fg("accent", text),
+					selectedText: (text) => theme.fg("accent", text),
+					description: (text) => theme.fg("muted", text),
+					scrollInfo: (text) => theme.fg("dim", text),
+					noMatch: (text) => theme.fg("warning", text),
+				},
+			});
+			editor.onSubmit = (value) => settle({ choice: options()[selected].id, message: value.trim() });
+			// The session input listener sees Shift+Tab before this dialog does.
+			// A message is being typed: Shift+Tab must not approve the call under it.
+			relaxPrompt = () => {
+				if (!editing) {
+					settle({ choice: "relax", message: editor.getText().trim() });
+				}
+			};
+
+			function refresh(): void {
+				cached = undefined;
+				cachedKey = "";
+				tui.requestRender();
 			}
-		};
 
-		function refresh(): void {
-			cached = undefined;
-			tui.requestRender();
-		}
-
-		function handleInput(data: string): void {
-			if (keybindings.matches(data, "app.tools.expand")) {
-				ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded());
+			function setScroll(next: number): void {
+				scroll = Math.max(0, Math.min(scrollRange, next));
 				refresh();
-				return;
 			}
 
-			if (editing) {
-				if (matchesKey(data, Key.escape)) {
-					editing = false;
-					editor.focused = false;
+			function handleInput(data: string): void {
+				if (keybindings.matches(data, "app.tools.expand")) {
+					ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded());
 					refresh();
 					return;
 				}
-				editor.handleInput(data);
-				refresh();
-				return;
-			}
 
-			const picked = data.length === 1 ? Number(data) : Number.NaN;
-			if (picked >= 1 && picked <= options().length) {
-				settle({ choice: options()[picked - 1].id, message: "" });
-				return;
-			}
-			if (keybindings.matches(data, "tui.select.up")) {
-				selected = Math.max(0, selected - 1);
-				refresh();
-				return;
-			}
-			if (keybindings.matches(data, "tui.select.down")) {
-				selected = Math.min(options().length - 1, selected + 1);
-				refresh();
-				return;
-			}
-			if (matchesKey(data, Key.tab)) {
-				editing = true;
-				editor.focused = true;
-				refresh();
-				return;
-			}
-			if (keybindings.matches(data, "tui.select.confirm")) {
-				settle({ choice: options()[selected].id, message: "" });
-				return;
-			}
-			if (keybindings.matches(data, "tui.select.cancel")) {
-				settle(undefined);
-			}
-		}
-
-		function render(width: number): string[] {
-			if (cached) {
-				return cached;
-			}
-			const lineWidth = Math.max(1, width);
-			const lines = [
-				theme.fg("accent", "─".repeat(lineWidth)),
-				truncateToWidth(theme.fg("text", ` ${title}`), lineWidth, ""),
-				truncateToWidth(theme.fg("muted", ` ${subject}`), lineWidth, ""),
-				"",
-			];
-			const rows = options();
-			for (let index = 0; index < rows.length; index++) {
-				const prefix = index === selected ? theme.fg("accent", " > ") : "   ";
-				const color = index === selected ? "accent" : "text";
-				const label = `${index + 1}. ${rows[index].label}`;
-				lines.push(truncateToWidth(`${prefix}${theme.fg(color, label)}`, lineWidth, ""));
-			}
-			lines.push("");
-			if (editing) {
-				lines.push(theme.fg("muted", " Message:"));
-				for (const line of editor.render(Math.max(1, lineWidth - 2))) {
-					lines.push(` ${line}`);
+				if (editing) {
+					if (matchesKey(data, Key.escape)) {
+						editing = false;
+						editor.focused = false;
+						refresh();
+						return;
+					}
+					editor.handleInput(data);
+					refresh();
+					return;
 				}
-				lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), lineWidth, ""));
-			} else {
-				const toolsKey = keybindings.getKeys("app.tools.expand")[0];
-				const hint = ` ↑↓ choose • Tab message • Shift+Tab relax • Enter confirm • Esc cancel${toolsKey ? ` • ${toolsKey} output` : ""}`;
-				lines.push(truncateToWidth(theme.fg("dim", hint), lineWidth, ""));
-			}
-			lines.push(theme.fg("accent", "─".repeat(lineWidth)));
-			cached = lines;
-			return lines;
-		}
 
-		return {
-			render,
-			invalidate: () => {
-				cached = undefined;
-			},
-			handleInput,
-		};
-	});
+				const picked = data.length === 1 ? Number(data) : Number.NaN;
+				if (picked >= 1 && picked <= options().length) {
+					settle({ choice: options()[picked - 1].id, message: "" });
+					return;
+				}
+				if (scrollRange > 0) {
+					if (matchesKey(data, Key.pageUp)) {
+						setScroll(scroll - windowRows);
+						return;
+					}
+					if (matchesKey(data, Key.pageDown)) {
+						setScroll(scroll + windowRows);
+						return;
+					}
+					if (matchesKey(data, Key.home)) {
+						setScroll(0);
+						return;
+					}
+					if (matchesKey(data, Key.end)) {
+						setScroll(scrollRange);
+						return;
+					}
+				}
+				if (keybindings.matches(data, "tui.select.up")) {
+					selected = Math.max(0, selected - 1);
+					refresh();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.down")) {
+					selected = Math.min(options().length - 1, selected + 1);
+					refresh();
+					return;
+				}
+				if (matchesKey(data, Key.tab)) {
+					editing = true;
+					editor.focused = true;
+					refresh();
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.confirm")) {
+					settle({ choice: options()[selected].id, message: "" });
+					return;
+				}
+				if (keybindings.matches(data, "tui.select.cancel")) {
+					settle(undefined);
+				}
+			}
+
+			function render(width: number): string[] {
+				const lineWidth = Math.max(1, width);
+				const rows = terminalRows();
+				const editorLines = editing ? editor.render(Math.max(1, lineWidth - 2)) : [];
+				// Editing replaces the hint with a label, the editor and its hint.
+				const editingRows = editing ? editorLines.length + 1 : 0;
+				windowRows = Math.max(1, previewHeight(rows, terminalFooter()) - editingRows);
+				const wrapped = payload.flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(line, lineWidth)));
+				scrollRange = Math.max(0, wrapped.length - windowRows);
+				scroll = Math.min(scroll, scrollRange);
+
+				const key = `${lineWidth}:${rows}:${scroll}:${selected}:${editing}`;
+				if (cached && cachedKey === key) {
+					return cached;
+				}
+
+				const lines = [
+					theme.fg("error", "─".repeat(lineWidth)),
+					truncateToWidth(theme.fg("text", ` ${title}`), lineWidth, ""),
+					truncateToWidth(theme.fg("muted", ` ${subject}`), lineWidth, ""),
+					"",
+				];
+				if (payload.length > 0) {
+					lines.push(...wrapped.slice(scroll, scroll + windowRows));
+					const last = Math.min(scroll + windowRows, wrapped.length);
+					lines.push(
+						truncateToWidth(
+							scrollRange > 0 ? theme.fg("dim", ` lines ${scroll + 1}-${last} of ${wrapped.length}`) : "",
+							lineWidth,
+							"",
+						),
+					);
+					lines.push("");
+				}
+				const choices = options();
+				for (let index = 0; index < choices.length; index++) {
+					const prefix = index === selected ? theme.fg("accent", " > ") : "   ";
+					const color = index === selected ? "accent" : "text";
+					const label = `${index + 1}. ${choices[index].label}`;
+					lines.push(truncateToWidth(`${prefix}${theme.fg(color, label)}`, lineWidth, ""));
+				}
+				lines.push("");
+				if (editing) {
+					lines.push(theme.fg("muted", " Message:"));
+					for (const line of editorLines) {
+						lines.push(` ${line}`);
+					}
+					lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), lineWidth, ""));
+				} else {
+					const toolsKey = keybindings.getKeys("app.tools.expand")[0];
+					const scrollHint = scrollRange > 0 ? " • PgUp/PgDn scroll" : "";
+					const hint = ` ↑↓ choose • Tab message • Shift+Tab relax • Enter confirm • Esc cancel${toolsKey ? ` • ${toolsKey} output` : ""}${scrollHint}`;
+					lines.push(truncateToWidth(theme.fg("dim", hint), lineWidth, ""));
+				}
+				lines.push(theme.fg("error", "─".repeat(lineWidth)));
+				cached = lines;
+				cachedKey = key;
+				return lines;
+			}
+
+			function handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+				if (event.type !== "wheel" || !event.wheelDelta || scrollRange === 0) {
+					return undefined;
+				}
+				setScroll(scroll + event.wheelDelta);
+				return { handled: true };
+			}
+
+			return {
+				render,
+				handleInput,
+				handleMouse,
+				invalidate: () => {
+					cached = undefined;
+					cachedKey = "";
+				},
+			};
+	},
+		{
+			overlay: true,
+			overlayOptions: () => ({
+				width: terminalColumns(),
+				maxHeight: promptHeight(terminalRows(), terminalFooter()),
+				anchor: "bottom-center",
+				margin: { bottom: terminalFooter() ?? 0 },
+			}),
+		},
+	);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -379,7 +557,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const isWrite = WRITE_TOOLS.has(toolName);
-		const path = isWrite ? String(event.input.path ?? "") : "";
+		const path = isWrite && "path" in event.input ? String(event.input.path ?? "") : "";
 		// A write without a path fails inside the tool; prompting for it is noise.
 		if (isWrite && !path) {
 			return undefined;
@@ -389,14 +567,17 @@ export default function (pi: ExtensionAPI) {
 			return undefined;
 		}
 
+		let diff = "";
 		if (isToolCallEventType("edit", event)) {
-			const failure = await editFailure(event.input, ctx);
-			if (failure) {
-				return { block: true, reason: failure };
+			const dry = await editDryRun(event.input, ctx);
+			if ("failure" in dry) {
+				return { block: true, reason: dry.failure };
 			}
+			diff = dry.diff;
 		}
 
-		const title = isWrite ? "Write to file?" : "Run tool?";
+		const edits = isToolCallEventType("edit", event) ? event.input.edits.length : 0;
+		const title = isWrite ? `Write to file?${edits > 1 ? ` (${edits} edits)` : ""}` : "Run tool?";
 		const subject = isWrite ? `${toolName}  ${singleLine(path)}` : `${toolName}  ${callSubject(event.input)}`;
 		const relaxLabel = () =>
 			loosen(mode) === "yolo" ? "Yes, allow everything this session" : "Yes, allow all writes this session";
@@ -409,7 +590,13 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const decline = `The user declined this ${toolName} call (${subject}). This is a deliberate rejection, not an error. Do not retry it unchanged.`;
-		const verdict = await askApproval(ctx, title, subject, relaxLabel);
+		const verdict = await askApproval(
+			ctx,
+			title,
+			subject,
+			payloadLines(toolName, event.input, diff, ctx.ui.theme),
+			relaxLabel,
+		);
 		if (!verdict) {
 			return { block: true, terminate: true, reason: `${decline} Wait for the user's next instruction.` };
 		}
