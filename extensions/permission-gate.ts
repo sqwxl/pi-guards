@@ -32,16 +32,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { findBashFileEdit, findMassKill } from "../bash-guard/guard.ts";
+import { isDangerousCommand } from "../dangerous-commands.ts";
 import { MODE_EVENT, isMode, singleLine, type Mode } from "../modes.ts";
-
-const dangerousPatterns = [
-	/\brm\s+(-[a-z]*[rf][a-z]*\s+)?(?:--recursive|--force|\/|~|\*)/i, // rm -rf on paths
-	/\bsudo\b/i, // privilege escalation
-	/\b(chmod|chown)\b.*777/i, // world-writable perms
-	/\b(dd|mkfs|fdisk|parted)\b/i, // raw disk operations
-	/\b(shutdown|reboot|poweroff|halt)\b/i, // system state changes
-	/\b>+\s*\/dev\/(sd[a-z]|disk)/i, // writing to block devices
-];
 
 export default function (pi: ExtensionAPI) {
 	let mode: Mode = "paranoid";
@@ -69,7 +61,7 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 		const massKill = findMassKill(command);
-		if (!massKill && !dangerousPatterns.some((p) => p.test(command))) return undefined;
+		if (!massKill && !isDangerousCommand(command)) return undefined;
 
 		if (!ctx.hasUI) {
 			return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };

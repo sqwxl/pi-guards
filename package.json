@@ -18,13 +18,21 @@
 	"files": [
 		"extensions",
 		"bash-guard/guard.ts",
+		"dangerous-commands.ts",
 		"modes.ts",
 		"paths.ts",
 		"README.md",
 		"LICENSE"
 	],
 	"scripts": {
-		"test": "node modes.test.mjs && node paths.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/kill.test.mjs"
+		"test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/kill.test.mjs"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions/confirm-writes.ts",
+			"./extensions/permission-gate.ts",
+			"./extensions/thinking-step.ts"
+		]
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

@@ -170,7 +170,12 @@ async function askApproval(
 		});
 		editor.onSubmit = (value) => settle({ choice: options()[selected].id, message: value.trim() });
 		// The session input listener sees Shift+Tab before this dialog does.
-		relaxPrompt = () => settle({ choice: "relax", message: editor.getText().trim() });
+		// A message is being typed: Shift+Tab must not approve the call under it.
+		relaxPrompt = () => {
+			if (!editing) {
+				settle({ choice: "relax", message: editor.getText().trim() });
+			}
+		};
 
 		function refresh(): void {
 			cached = undefined;

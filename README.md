@@ -18,7 +18,7 @@ Pi installs the `unbash` dependency.
 
 ## Approval modes
 
-`confirm-writes` starts a new session in CAREFUL. The mode you set is stored in the session, so a resumed session keeps it. Press shift+tab to cycle, or use `/edits`. The second option in the approval prompt accepts the call and loosens the mode one step (PARANOID → CAREFUL → YOLO); shift+tab in the dialog takes that option, message included.
+`confirm-writes` starts a new session in CAREFUL. The mode you set is stored in the session, so a resumed session keeps it; a fork copies the branch and keeps it too. Press shift+tab to cycle, or use `/edits`. Shift+tab works only when `app.thinking.cycle` is unbound in `keybindings.json`. The second option in the approval prompt accepts the call and loosens the mode one step (PARANOID → CAREFUL → YOLO); shift+tab in the dialog takes that option, message included, unless you are typing a message.
 
 | Mode | Asks before |
 |---|---|
@@ -34,6 +34,8 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 
 - CAREFUL approves writes under `/tmp`, `/private/tmp`, and `/var/folders` without a prompt. The check resolves the path, so `..` cannot leave those roots. Symlinks are not resolved: a link inside a temporary directory can point outside it, and a write through that link skips approval.
 - `permission-gate` detects bash file writes with `unbash` and a set of known commands. Redirections from commands it does not model, in-place editors it does not know, and obfuscated commands can pass without a prompt.
+- The write gate covers `write`, `edit`, and `edit_lines`. Other tools that can change files, such as MCP tools or custom tools, are not gated in CAREFUL.
+- Destructive-command checks are text patterns. They also match a command that only mentions a destructive shape in an argument, such as `grep 'rm -rf'`. Expect a prompt, not silence.
 - The approval dialog shows one line per call. A long command is truncated to 160 characters, so check the full tool call in the transcript when a command is cut off.
 - The `powershell` tool is not analyzed. PARANOID asks for it; CAREFUL does not. On native Windows, keep the `bash` tool when you need the write gate.
 - Control characters in tool arguments are replaced with spaces before display. They never reach the terminal through the dialog.
