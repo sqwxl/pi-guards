@@ -1,0 +1,4 @@
+#!/bin/sh
+# Format staged files with Prettier. lint-staged re-stages them and stashes
+# unstaged changes, so a partially staged file commits only what you staged.
+exec npx lint-staged

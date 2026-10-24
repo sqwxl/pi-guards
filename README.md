@@ -22,11 +22,11 @@ Pi installs the `unbash` dependency.
 
 The prompt opens as an overlay above the editor and shows that call's payload. A batch renders every call preview before the first approval, and the transcript follows its newest block, so the call being approved is off screen. The overlay leaves the transcript's layout alone and owns PgUp/PgDn, which the fullscreen viewport would otherwise use to scroll the transcript.
 
-| Mode | Asks before |
-|---|---|
-| `PARANOID` | Every tool call except file reads (`read`, `ls`, `grep`, `find`) |
-| `CAREFUL` | File writes (`write`, `edit`, `edit_lines`) |
-| `YOLO` | No write approvals; `permission-gate` still checks destructive bash |
+| Mode       | Asks before                                                         |
+| ---------- | ------------------------------------------------------------------- |
+| `PARANOID` | Every tool call except file reads (`read`, `ls`, `grep`, `find`)    |
+| `CAREFUL`  | File writes (`write`, `edit`, `edit_lines`)                         |
+| `YOLO`     | No write approvals; `permission-gate` still checks destructive bash |
 
 The status bar shows the active mode on a green, orange, or red background. Start a session in YOLO with `--auto-edits`. YOLO affects writes only: `permission-gate` still refuses bash file edits and asks before destructive commands. Print and JSON modes have no dialog, so a call that needs approval is blocked, in every mode: unattended runs need `--auto-edits` and a command set that the guards accept.
 
@@ -45,11 +45,11 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 
 ## Extensions
 
-| Extension | Behavior |
-|---|---|
-| `extensions/confirm-writes.ts` | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call. |
+| Extension                       | Behavior                                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                         |
 | `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
-| `extensions/thinking-step.ts` | Show the reasoning step while the model works. |
+| `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                    |
 
 ## bash-guard
 
@@ -61,3 +61,13 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 npm install
 npm test
 ```
+
+## Development
+
+`npm install` points `core.hooksPath` at `.githooks`, so every clone gets the pre-commit hook. The hook runs `lint-staged`, which formats the staged files with Prettier and re-stages them. It stashes unstaged changes first, so a partially staged file commits only what you staged.
+
+```sh
+npm run format   # format the whole repository
+```
+
+The project uses the Prettier defaults. `.prettierignore` excludes the lock file.

@@ -1,44 +1,53 @@
 {
-	"name": "pi-guards",
-	"version": "0.1.0",
-	"type": "module",
-	"description": "Pi extensions that gate destructive bash and file writes: approval modes, a bash file-write refusal, and a bash guard shared with Claude Code hooks.",
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/sqwxl/pi-guards.git"
-	},
-	"keywords": [
-		"pi-package",
-		"pi",
-		"extension",
-		"permissions",
-		"approval"
-	],
-	"files": [
-		"extensions",
-		"bash-guard/guard.ts",
-		"dangerous-commands.ts",
-		"modes.ts",
-		"paths.ts",
-		"README.md",
-		"LICENSE"
-	],
-	"scripts": {
-		"test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs"
-	},
-	"pi": {
-		"extensions": [
-			"./extensions/confirm-writes.ts",
-			"./extensions/permission-gate.ts",
-			"./extensions/thinking-step.ts"
-		]
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
-	},
-	"dependencies": {
-		"unbash": "^5.0.0"
-	}
+  "name": "pi-guards",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi extensions that gate destructive bash and file writes: approval modes, a bash file-write refusal, and a bash guard shared with Claude Code hooks.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sqwxl/pi-guards.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "extension",
+    "permissions",
+    "approval"
+  ],
+  "files": [
+    "extensions",
+    "bash-guard/guard.ts",
+    "dangerous-commands.ts",
+    "modes.ts",
+    "paths.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs",
+    "format": "prettier --write .",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs,cjs,json,md}": "prettier --write --ignore-unknown"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/confirm-writes.ts",
+      "./extensions/permission-gate.ts",
+      "./extensions/thinking-step.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "dependencies": {
+    "unbash": "^5.0.0"
+  },
+  "devDependencies": {
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.10"
+  }
 }
