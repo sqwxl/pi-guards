@@ -15,7 +15,13 @@ type AstNode = {
   readonly commands?: readonly AstNode[];
 };
 
-type Check = (node: AstNode, raw: string) => string | undefined;
+type Check<T> = (node: AstNode, raw: string) => T | undefined;
+
+/** Prompt text for a kill, and whether it can hit more than the named PID. */
+export type Kill = {
+  readonly reason: string;
+  readonly mass: boolean;
+};
 
 import { isInsideScratch } from "../paths.ts";
 
@@ -50,7 +56,6 @@ const GIT_APPLY_READ_ONLY = new Set([
 const PATTERN_KILLERS = new Set(["pkill", "killall"]);
 const DELETERS = new Set(["rm", "unlink", "rmdir"]);
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "ps", "lsof"]);
-const LISTENER_ONLY = /^(?:-s)?TCP:LISTEN$/;
 
 const WRAPPER_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   sudo: new Set([
@@ -137,9 +142,9 @@ export function findBashFileEdit(command: string): string | undefined {
   return findInScript(command, 0, checkFileEdit);
 }
 
-/** True when the command kills processes picked by a pattern or a broad lookup rather than by explicit PID. */
-export function findMassKill(command: string): string | undefined {
-  return findInScript(command, 0, checkMassKill);
+/** The command's process kill: pattern, lookup, or explicit PID. */
+export function findKill(command: string): Kill | undefined {
+  return findInScript(command, 0, checkKill);
 }
 
 /** Deletion of a path outside the scratch roots, or of a path that cannot be resolved. */
@@ -150,11 +155,11 @@ export function findBashDeletion(
   return findInScript(command, 0, (node) => checkDeletion(node, cwd));
 }
 
-function findInScript(
+function findInScript<T>(
   source: string,
   depth: number,
-  check: Check,
-): string | undefined {
+  check: Check<T>,
+): T | undefined {
   if (depth > 6) {
     return undefined;
   }
@@ -166,12 +171,12 @@ function findInScript(
   }
 }
 
-function walk(
+function walk<T>(
   node: unknown,
   raw: string,
   depth: number,
-  check: Check,
-): string | undefined {
+  check: Check<T>,
+): T | undefined {
   if (Array.isArray(node)) {
     for (const child of node) {
       const found = walk(child, raw, depth, check);
@@ -242,7 +247,7 @@ function nestedScript(command: AstNode): string | undefined {
   return undefined;
 }
 
-function checkMassKill(node: AstNode): string | undefined {
+function checkKill(node: AstNode): Kill | undefined {
   if (node.type === "Pipeline") {
     return checkKillPipeline(node);
   }
@@ -256,22 +261,52 @@ function checkMassKill(node: AstNode): string | undefined {
   const { base, args } = resolved;
 
   if (PATTERN_KILLERS.has(base)) {
-    return `'${base}' kills every process that matches a pattern`;
+    return {
+      reason: `'${base}' kills every process that matches a pattern`,
+      mass: true,
+    };
   }
   if (base !== "kill") {
     return undefined;
   }
 
+  const first = nodeValue(args[0]);
+  if (first === "-l" || first === "-L" || first === "--list") {
+    return undefined;
+  }
+  const isSignalCheck =
+    first === "-0" ||
+    ((first === "-s" || first === "-n") && nodeValue(args[1]) === "0");
+  if (isSignalCheck) {
+    return undefined;
+  }
+
   const targets = killTargets(args);
   if (targets.some((target) => nodeValue(target) === "-1")) {
-    return "'kill -1' signals every process you own";
+    return { reason: "'kill -1' signals every process you own", mass: true };
+  }
+  if (targets.length === 0) {
+    return undefined;
   }
   const lookup = targets
     .map((target) => walk(target, "", 0, broadPidLookup))
     .find((found) => found !== undefined);
-  return lookup
-    ? `'kill $(${lookup} ...)' kills every process the lookup matches`
-    : undefined;
+  if (lookup) {
+    return {
+      reason: `'kill $(${lookup} ...)' kills every process the lookup matches`,
+      mass: true,
+    };
+  }
+  const pids = targets
+    .map((target) => nodeValue(target))
+    .filter((value) => value !== undefined);
+  return {
+    reason:
+      pids.length > 0
+        ? `'kill' stops ${pids.join(" ")}`
+        : "'kill' stops a process it resolves at runtime",
+    mass: false,
+  };
 }
 
 function checkDeletion(node: AstNode, cwd: string): string | undefined {
@@ -329,7 +364,7 @@ function deletionTargets(args: AstNode[]): AstNode[] {
   return targets;
 }
 
-function checkKillPipeline(pipeline: AstNode): string | undefined {
+function checkKillPipeline(pipeline: AstNode): Kill | undefined {
   const commands = pipeline.commands ?? [];
   const killer = commands.findIndex(
     (command) => resolveWrapped(commandWords(command))?.base === "kill",
@@ -342,8 +377,14 @@ function checkKillPipeline(pipeline: AstNode): string | undefined {
     .map((command) => walk(command, "", 0, broadPidLookup))
     .find((found) => found !== undefined);
   return lookup
-    ? `'${lookup} | xargs kill' kills every process the lookup matches`
-    : undefined;
+    ? {
+        reason: `'${lookup} | xargs kill' kills every process the lookup matches`,
+        mass: true,
+      }
+    : {
+        reason: "'xargs kill' stops the process named by the earlier command",
+        mass: false,
+      };
 }
 
 function broadPidLookup(node: AstNode): string | undefined {
@@ -351,13 +392,7 @@ function broadPidLookup(node: AstNode): string | undefined {
     return undefined;
   }
   const resolved = resolveWrapped(commandWords(node));
-  if (!resolved || !PID_LOOKUPS.has(resolved.base)) {
-    return undefined;
-  }
-  const listenerOnly =
-    resolved.base === "lsof" &&
-    resolved.args.some((arg) => LISTENER_ONLY.test(nodeValue(arg) ?? ""));
-  return listenerOnly ? undefined : resolved.base;
+  return resolved && PID_LOOKUPS.has(resolved.base) ? resolved.base : undefined;
 }
 
 function killTargets(args: AstNode[]): AstNode[] {

@@ -5,10 +5,11 @@
  * commands via the bash tool. Blocks by default when there's no UI
  * (print/json modes).
  *
- * Commands that kill by pattern (`pkill`, `killall`, `kill $(pgrep ...)`,
- * `pgrep ... | xargs kill`) are treated as dangerous by the same parser that
- * finds file writes. Deletion commands (`rm`, `unlink`, `rmdir`, `git rm`)
- * ask for approval unless every target is inside a scratch root.
+ * Commands that stop a process (`kill`, `pkill`, `killall`, also through
+ * `sudo` or `xargs`) are treated as dangerous by the same parser that finds
+ * file writes. CAREFUL asks for every kill. YOLO asks only when the kill can
+ * hit more than the named process. Deletion commands (`rm`, `unlink`, `rmdir`,
+ * `git rm`) ask for approval unless every target is inside a scratch root.
  *
  * Bash commands that write files are refused before they run. In-place
  * editors, interpreter programs that call write functions, and text producers
@@ -35,7 +36,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   findBashDeletion,
   findBashFileEdit,
-  findMassKill,
+  findKill,
 } from "../bash-guard/guard.ts";
 import { isDangerousCommand } from "../dangerous-commands.ts";
 import { MODE_EVENT, isMode, singleLine, type Mode } from "../modes.ts";
@@ -65,9 +66,12 @@ export default function (pi: ExtensionAPI) {
         reason: `Blocked: ${fileEdit}. Use the edit or write tool instead. If a script is needed, create it with the write tool first.`,
       };
     }
-    const massKill = findMassKill(command);
+    const kill = findKill(command);
     const deletion = findBashDeletion(command, ctx.cwd);
-    if (!massKill && !deletion && !isDangerousCommand(command))
+    // YOLO approves a kill aimed at an explicit PID; it still asks for mass kills.
+    const killNeedsApproval =
+      kill !== undefined && (mode !== "yolo" || kill.mass);
+    if (!killNeedsApproval && !deletion && !isDangerousCommand(command))
       return undefined;
 
     if (!ctx.hasUI) {
@@ -77,7 +81,10 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    const warning = massKill ?? deletion ?? "Dangerous command";
+    const warning =
+      (killNeedsApproval && kill ? kill.reason : undefined) ??
+      deletion ??
+      "Dangerous command";
     const choice = await ctx.ui.select(
       `⚠️ ${warning}\n\n  ${singleLine(command)}\n\nAllow?`,
       ["Yes", "No"],

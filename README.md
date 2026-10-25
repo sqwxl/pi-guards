@@ -37,6 +37,7 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 - CAREFUL approves writes under `/tmp`, `/private/tmp`, and `/var/folders` without a prompt. The check resolves the path, so `..` cannot leave those roots. Symlinks are not resolved: a link inside a temporary directory can point outside it, and a write or deletion through that link skips approval.
 - `permission-gate` detects bash file writes with `unbash` and a set of known commands. Redirections from commands it does not model, in-place editors it does not know, and obfuscated commands can pass without a prompt.
 - Deletions (`rm`, `unlink`, `rmdir`, `git rm`) ask for approval in CAREFUL and YOLO unless every target is inside a scratch root. The scratch roots themselves are not exempt. `find -delete` and `shred` always ask.
+- Any command that stops a process asks for approval in CAREFUL. In YOLO only mass kills ask: `pkill`, `killall`, `kill -1`, and lookups such as `kill $(pgrep ...)` or `pgrep ... | xargs kill`. A `kill` aimed at an explicit PID runs without a prompt in YOLO. `kill -0` and `kill -l` do not stop a process and never ask.
 - The write gate covers `write`, `edit`, and `edit_lines`. Other tools that can change files, such as MCP tools or custom tools, are not gated in CAREFUL.
 - Destructive-command checks are text patterns. They also match a command that only mentions a destructive shape in an argument, such as `rg 'git reset --hard' docs/`. Expect a prompt, not silence.
 - The approval prompt repeats the payload of the call it asks about: the edit diff, the written content, or the full command. A long payload scrolls with PgUp/PgDn, Home/End, or the wheel in fullscreen. The subject line above it stays cut at 160 characters. Print and JSON modes use the built-in selector, which shows only that subject line.
@@ -45,15 +46,15 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 
 ## Extensions
 
-| Extension                       | Behavior                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                         |
-| `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
-| `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                    |
+| Extension                       | Behavior                                                                                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                                           |
+| `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including process kills and deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
+| `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                                      |
 
 ## bash-guard
 
-`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes, deletions, and mass kills. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
+`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes, deletions, and process kills. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
 
 ## Tests
 
