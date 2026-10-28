@@ -36,7 +36,9 @@
  * command. A payload longer than the prompt scrolls with PgUp/PgDn, Home/End, or
  * the wheel while the choices stay pinned. The prompt is an overlay: the editor
  * dock would squeeze the transcript to one row, and the fullscreen viewport
- * consumes PgUp/PgDn before a dock component sees them.
+ * consumes PgUp/PgDn before a dock component sees them. The prompt is
+ * content-sized, capped by the rows above the editor, and follows a resized
+ * window in both width and height.
  *
  * Three modes. CAREFUL (the default) prompts for writes, PARANOID prompts for
  * every tool call except file reads, YOLO writes without prompting. Cycle with
@@ -109,8 +111,6 @@ type LayoutBoxShape = { rect: { y: number }; children: LayoutBoxShape[] };
 
 /** Rows the prompt reserves for its frame, the subject, the choices and the hint. */
 const PROMPT_CHROME_ROWS = 12;
-/** Smallest payload window worth showing. */
-const PREVIEW_MIN_ROWS = 4;
 /**
  * Rows between the editor's bottom border and the terminal bottom, read from the
  * layout frame the renderer used. The dock is the last child of the root, and the
@@ -130,15 +130,12 @@ function footerRows(tui: TUI, rows: number): number | undefined {
 
 /** Rows the prompt may occupy: everything above the editor's bottom border. */
 function promptHeight(rows: number, footer: number | undefined): number {
-  return Math.max(PROMPT_CHROME_ROWS + PREVIEW_MIN_ROWS, rows - (footer ?? 0));
+  return Math.max(1, rows - (footer ?? 0));
 }
 
-/** Rows of payload the prompt shows at once. */
+/** Rows of payload the prompt shows at once; on a short window the payload gives way to the frame. */
 function previewHeight(rows: number, footer: number | undefined): number {
-  return Math.max(
-    PREVIEW_MIN_ROWS,
-    promptHeight(rows, footer) - PROMPT_CHROME_ROWS,
-  );
+  return Math.max(1, promptHeight(rows, footer) - PROMPT_CHROME_ROWS);
 }
 
 /** The built-in edit tool with writes disabled: reports whether the call could apply, without touching the file. */
@@ -274,20 +271,18 @@ async function askApproval(
   }
 
   let terminalRows = (): number => 0;
-  let terminalColumns = (): number => 0;
   let terminalFooter = (): number | undefined => undefined;
 
   return ctx.ui.custom<Verdict | undefined>(
     (tui, theme, keybindings, done) => {
       const footer = footerRows(tui, tui.terminal.rows);
       terminalRows = () => tui.terminal.rows;
-      terminalColumns = () => tui.terminal.columns;
       terminalFooter = () => footer;
       let selected = 0;
       let editing = false;
       let scroll = 0;
       let scrollRange = 0;
-      let windowRows = PREVIEW_MIN_ROWS;
+      let windowRows = 1;
       let cached: string[] | undefined;
       let cachedKey = "";
       let settled = false;
@@ -505,9 +500,13 @@ async function askApproval(
     },
     {
       overlay: true,
+      // Overlay options are read once, when the prompt opens: a fixed width or
+      // maxHeight would freeze the prompt at the size the window had then.
+      // Percentages are resolved again on every render, so the prompt follows a
+      // resized window.
       overlayOptions: () => ({
-        width: terminalColumns(),
-        maxHeight: promptHeight(terminalRows(), terminalFooter()),
+        width: "100%",
+        maxHeight: "100%",
         anchor: "bottom-center",
         margin: { bottom: terminalFooter() ?? 0 },
       }),
