@@ -663,10 +663,11 @@ export default function (pi: ExtensionAPI) {
     const subject = isWrite
       ? `${toolName}  ${singleLine(path)}`
       : `${toolName}  ${callSubject(event.input)}`;
+    // PARANOID relaxes to CAREFUL, which still asks before writes.
     const relaxLabel = () =>
-      loosen(mode) === "yolo"
-        ? "Yes, allow everything this session"
-        : "Yes, allow all writes this session";
+      mode === "paranoid"
+        ? "Yes, ask only before writes"
+        : "Yes, allow everything";
 
     if (!ctx.hasUI) {
       return {
