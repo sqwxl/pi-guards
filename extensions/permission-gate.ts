@@ -29,6 +29,10 @@
  * This extension tracks the mode over `pi.events` and stays silent in PARANOID:
  * the approval already covers the command, so the file-write refusal and the
  * dangerous-command prompt would only second-guess the user.
+ *
+ * Pi reports the selector as blocked through OSC 7501. This extension also
+ * emits Herdr's blocked event around the wait, because Herdr's Pi integration
+ * does not consume OSC 7501 yet.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -40,6 +44,7 @@ import {
 } from "../bash-guard/guard.ts";
 import { isDangerousCommand } from "../dangerous-commands.ts";
 import { MODE_EVENT, isMode, singleLine, type Mode } from "../modes.ts";
+import { APPROVAL_LABEL, beginHerdrBlocked } from "./approval-status.ts";
 
 export default function (pi: ExtensionAPI) {
   let mode: Mode = "paranoid";
@@ -85,10 +90,16 @@ export default function (pi: ExtensionAPI) {
       (killNeedsApproval && kill ? kill.reason : undefined) ??
       deletion ??
       "Dangerous command";
-    const choice = await ctx.ui.select(
-      `⚠️ ${warning}\n\n  ${singleLine(command)}\n\nAllow?`,
-      ["Yes", "No"],
-    );
+    const releaseHerdr = beginHerdrBlocked(pi, APPROVAL_LABEL);
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(
+        `⚠️ ${warning}\n\n  ${singleLine(command)}\n\nAllow?`,
+        ["Yes", "No"],
+      );
+    } finally {
+      releaseHerdr();
+    }
     if (choice !== "Yes") {
       return {
         block: true,

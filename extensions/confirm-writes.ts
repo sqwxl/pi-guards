@@ -40,6 +40,10 @@
  * content-sized, capped by the rows above the editor, and follows a resized
  * window in both width and height.
  *
+ * While the prompt waits, it reports blocked to Herdr's Pi integration and, for
+ * the overlay that Pi core leaves out, to OSC 7501 terminals. The Herdr event is
+ * a compatibility bridge until Herdr consumes OSC 7501.
+ *
  * Three modes. CAREFUL (the default) prompts for writes, PARANOID prompts for
  * every tool call except file reads, YOLO writes without prompting. Cycle with
  * shift+tab or switch with /edits. In an approval dialog shift+tab takes the
@@ -103,6 +107,7 @@ import {
   type Mode,
 } from "../modes.ts";
 import { isScratchPath } from "../paths.ts";
+import { beginHerdrBlocked, beginStandardBlocked } from "./approval-status.ts";
 
 const MODE_SHORTCUT = "shift+tab";
 
@@ -286,6 +291,7 @@ async function askApproval(
       let cached: string[] | undefined;
       let cachedKey = "";
       let settled = false;
+      let releaseStandard = () => {};
 
       function settle(verdict: Verdict | undefined): void {
         if (settled) {
@@ -293,7 +299,11 @@ async function askApproval(
         }
         settled = true;
         relaxPrompt = undefined;
-        done(verdict);
+        try {
+          done(verdict);
+        } finally {
+          releaseStandard();
+        }
       }
 
       const editor = new Editor(tui, {
@@ -488,6 +498,18 @@ async function askApproval(
         return { handled: true };
       }
 
+      releaseStandard = beginStandardBlocked(tui.terminal, title, () => {
+        if (ctx.isIdle?.() === true) {
+          return { state: "idle", app: "pi" };
+        }
+        const sessionName = ctx.sessionManager.getSessionName?.();
+        return {
+          state: "working",
+          app: "pi",
+          ...(sessionName ? { message: sessionName } : {}),
+        };
+      });
+
       return {
         render,
         handleInput,
@@ -496,6 +518,7 @@ async function askApproval(
           cached = undefined;
           cachedKey = "";
         },
+        dispose: () => releaseStandard(),
       };
     },
     {
@@ -676,13 +699,19 @@ export default function (pi: ExtensionAPI) {
     }
 
     const decline = `The user declined this ${toolName} call (${subject}). This is a deliberate rejection, not an error. Do not retry it unchanged.`;
-    const verdict = await askApproval(
-      ctx,
-      title,
-      subject,
-      payloadLines(toolName, event.input, diff, ctx.ui.theme),
-      relaxLabel,
-    );
+    const releaseHerdr = beginHerdrBlocked(pi, title);
+    let verdict: Verdict | undefined;
+    try {
+      verdict = await askApproval(
+        ctx,
+        title,
+        subject,
+        payloadLines(toolName, event.input, diff, ctx.ui.theme),
+        relaxLabel,
+      );
+    } finally {
+      releaseHerdr();
+    }
     if (!verdict) {
       return {
         block: true,

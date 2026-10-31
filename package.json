@@ -1,6 +1,6 @@
 {
   "name": "pi-guards",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Pi extensions that gate destructive bash and file writes: approval modes, a bash file-write refusal, and a bash guard shared with Claude Code hooks.",
   "license": "MIT",
@@ -25,7 +25,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs",
+    "test": "node approval-status.test.mjs && node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs",
     "format": "prettier --write .",
     "prepare": "git config core.hooksPath .githooks || true"
   },

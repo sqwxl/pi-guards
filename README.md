@@ -30,6 +30,12 @@ The prompt opens as an overlay above the editor and shows that call's payload. A
 
 The status bar shows the active mode on a green, orange, or red background. Start a session in YOLO with `--auto-edits`. YOLO affects writes only: `permission-gate` still refuses bash file edits and asks before destructive commands. Print and JSON modes have no dialog, so a call that needs approval is blocked, in every mode: unattended runs need `--auto-edits` and a command set that the guards accept.
 
+## Status reporting
+
+While an approval waits, the guards report the session as blocked. Herdr's Pi integration listens for the `herdr:blocked` event and turns it into a blocked pane, tab, and workspace. The event is emitted only inside Herdr.
+
+The custom write prompt also reports `blocked` with `kind=permission` through the Program Status Protocol (OSC 7501), so terminals and dashboards that support it see the wait. `permission-gate` uses Pi's selector, which Pi reports itself. OSC 7501 is the portable path; the Herdr event is a compatibility bridge until Herdr consumes OSC 7501. Set `PI_PROGRAM_STATUS=1` when the terminal consumes OSC 7501 but does not answer the support probe.
+
 ## Limits
 
 These guards are advisory. They are heuristic checks in the Pi process, not a sandbox, and they do not stop a determined command. Use an operating-system or container boundary when you need real isolation.
@@ -43,6 +49,7 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 - The approval prompt repeats the payload of the call it asks about: the edit diff, the written content, or the full command. A long payload scrolls with PgUp/PgDn, Home/End, or the wheel in fullscreen. The subject line above it stays cut at 160 characters. Print and JSON modes use the built-in selector, which shows only that subject line.
 - The `powershell` tool is not analyzed. PARANOID asks for it; CAREFUL does not. On native Windows, keep the `bash` tool when you need the write gate.
 - Control characters in tool arguments are replaced with spaces before display. They never reach the terminal through the dialog.
+- OSC 7501 has one root status record per pane. The custom overlay sets `blocked` and restores `working` (or `idle`) when it closes. If another Pi prompt is open at the same time, the last report owns the label until Pi reports a settled state.
 
 ## Extensions
 
@@ -51,6 +58,8 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 | `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                                           |
 | `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including process kills and deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
 | `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                                      |
+
+`extensions/approval-status.ts` is shared by the two guards and carries the status bridges. It is not loaded as an extension.
 
 ## bash-guard
 
