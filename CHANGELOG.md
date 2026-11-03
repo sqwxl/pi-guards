@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-11-03
+
+_No user-facing changes._
+
 ## [0.3.0] - 2026-10-31
 
 ### Added
@@ -32,5 +36,6 @@ All notable changes to this project are documented here. This project follows [S
 - **confirm-writes:** keep shift+tab working in approval dialogs ([62724dc](https://github.com/sqwxl/pi-guards/commit/62724dc7a469a086a3c5653cf017cb7a22664706))
 - **confirm-writes:** handle ctrl+o in the write approval prompt ([3158dba](https://github.com/sqwxl/pi-guards/commit/3158dba941ec03dc02f2b467ca90f6562a6e7761))
 
+[0.3.1]: https://github.com/sqwxl/pi-guards/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/sqwxl/pi-guards/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sqwxl/pi-guards/releases/tag/v0.2.0
