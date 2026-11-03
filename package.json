@@ -22,10 +22,12 @@
     "modes.ts",
     "paths.ts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "node approval-status.test.mjs && node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs",
+    "changelog": "changelog-zero --history --style keepachangelog > CHANGELOG.md",
     "format": "prettier --write .",
     "prepare": "git config core.hooksPath .githooks || true"
   },
@@ -47,6 +49,7 @@
     "unbash": "^5.0.0"
   },
   "devDependencies": {
+    "changelog-zero": "^0.1.0",
     "lint-staged": "^17.6.0",
     "prettier": "^3.9.10"
   }
