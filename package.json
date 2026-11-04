@@ -26,7 +26,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node approval-status.test.mjs && node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs",
+    "test": "node approval-status.test.mjs && node modes.test.mjs && node paths.test.mjs && node dangerous-commands.test.mjs && node bash-guard/guard.test.mjs && node bash-guard/deletion.test.mjs && node bash-guard/kill.test.mjs && node bash-guard/severe.test.mjs",
     "changelog": "changelog-zero --history --style keepachangelog > CHANGELOG.md",
     "format": "prettier --write .",
     "prepare": "git config core.hooksPath .githooks || true"

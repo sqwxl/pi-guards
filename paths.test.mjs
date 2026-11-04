@@ -1,4 +1,4 @@
-import { isInsideScratch, isScratchPath } from "./paths.ts";
+import { isCriticalPath, isInsideScratch, isScratchPath } from "./paths.ts";
 
 let failed = 0;
 let checks = 0;
@@ -60,6 +60,33 @@ check(
   isInsideScratch("src/main.rs", "/home/u/project"),
   false,
 );
+
+const project = "/home/u/project";
+check("critical: root", isCriticalPath("/", project), true);
+check("critical: root glob", isCriticalPath("/*", project), true);
+check("critical: system tree", isCriticalPath("/etc", project), true);
+check("critical: system subtree", isCriticalPath("/etc/nginx", project), true);
+check("critical: usr subtree", isCriticalPath("/usr/local/bin", project), true);
+check("critical: escape", isCriticalPath("/tmp/../etc", project), true);
+check("critical: dot-dot escape", isCriticalPath("/tmp/../..", project), true);
+check("critical: home root", isCriticalPath("/home", project), true);
+check("critical: home dir", isCriticalPath("/home/u", project), true);
+check("critical: home glob", isCriticalPath("/home/*", project), true);
+check("critical: macOS home", isCriticalPath("/Users/u", project), true);
+check("critical: tilde", isCriticalPath("~", project), true);
+check("critical: tilde slash", isCriticalPath("~/", project), true);
+check("critical: HOME", isCriticalPath("$HOME", project), true);
+check("critical: braced HOME", isCriticalPath("${HOME}", project), true);
+check("critical: project path", isCriticalPath("src/main.rs", project), false);
+check(
+  "critical: home project",
+  isCriticalPath("/home/u/project", project),
+  false,
+);
+check("critical: tilde project", isCriticalPath("~/project", project), false);
+check("critical: temp", isCriticalPath("/tmp/build", project), false);
+check("critical: unknown variable", isCriticalPath("$DIR", project), false);
+check("critical: relative dot", isCriticalPath(".", project), false);
 
 console.log(failed === 0 ? `ALL OK (${checks} checks)` : `${failed} FAILURES`);
 process.exit(failed === 0 ? 0 : 1);

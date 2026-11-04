@@ -2,13 +2,15 @@
  * Approval modes shared by the guard extensions.
  *
  * PARANOID asks before every tool call except file reads, CAREFUL asks before
- * writes, YOLO asks before no write. Extensions exchange the active mode over
- * `pi.events` (event `guards:mode`): Pi loads every extension with its own
- * module cache, so module state is not shared between extensions.
+ * writes, YOLO asks only before severe destructive bash. Extensions exchange
+ * the active mode over `pi.events` (event `guards:mode`): Pi loads every
+ * extension with its own module cache, so module state is not shared between
+ * extensions.
  *
- * The mode covers only the tool approvals in this package. `permission-gate`
- * keeps refusing bash file edits and asking before destructive commands in
- * every mode except PARANOID, where `confirm-writes` already asks.
+ * The mode covers only the approvals in this package. `permission-gate` refuses
+ * bash file edits and asks before destructive commands in CAREFUL. In YOLO it
+ * asks only before deletion of a system tree, a disk overwrite, or a format.
+ * PARANOID belongs to `confirm-writes`, which asks before every bash call.
  */
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -42,7 +44,7 @@ export const MODE_COLOR: Record<Mode, "success" | "warning" | "error"> = {
 export const MODE_HINT: Record<Mode, string> = {
   paranoid: "ask before every tool call except reads",
   careful: "ask before writes",
-  yolo: "no write approvals",
+  yolo: "ask only before severe destructive bash",
 };
 
 /** Tools that only read. PARANOID never prompts for these. */

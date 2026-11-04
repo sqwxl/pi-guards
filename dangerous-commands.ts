@@ -1,9 +1,9 @@
 /**
  * Raw-text checks for commands that destroy data or run remote code.
  *
- * `permission-gate` asks before running a matching command. The checks are
- * hints, not a parser: obfuscated commands can pass. The bash-guard parser
- * handles the file-write cases.
+ * `permission-gate` asks before running a matching command in CAREFUL. The
+ * checks are hints, not a parser: obfuscated commands can pass. The bash-guard
+ * parser handles the file-write cases and the severe actions that YOLO gates.
  */
 
 const PATTERNS = [

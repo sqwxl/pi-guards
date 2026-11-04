@@ -50,10 +50,10 @@
  * relax option: it approves the call and loosens the mode one step
  * (PARANOID → CAREFUL → YOLO). `--auto-edits` starts a session in YOLO. The
  * mode is stored as a `guards-mode` session entry, so a resumed session keeps
- * the last mode; a session without one starts in CAREFUL. YOLO disables only
- * these write approvals: `permission-gate` still checks destructive bash. The
- * active mode is published on `pi.events`, so `permission-gate` can stay silent
- * when PARANOID already asks about a bash call. shift+tab requires
+ * the last mode; a session without one starts in CAREFUL. YOLO disables these
+ * write approvals; `permission-gate` then asks only before severe destructive
+ * bash. The active mode is published on `pi.events`, so `permission-gate` can
+ * stay silent when PARANOID already asks about a bash call. shift+tab requires
  * `app.thinking.cycle` to be unbound in keybindings.json. Pi dispatches
  * registered shortcuts only through the main editor, so a terminal input
  * listener handles shift+tab while a dialog owns keyboard focus.

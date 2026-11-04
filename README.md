@@ -22,13 +22,13 @@ Pi installs the `unbash` dependency.
 
 The prompt opens as an overlay above the editor and shows that call's payload. A batch renders every call preview before the first approval, and the transcript follows its newest block, so the call being approved is off screen. The overlay leaves the transcript's layout alone and owns PgUp/PgDn, which the fullscreen viewport would otherwise use to scroll the transcript.
 
-| Mode       | Asks before                                                         |
-| ---------- | ------------------------------------------------------------------- |
-| `PARANOID` | Every tool call except file reads (`read`, `ls`, `grep`, `find`)    |
-| `CAREFUL`  | File writes (`write`, `edit`, `edit_lines`)                         |
-| `YOLO`     | No write approvals; `permission-gate` still checks destructive bash |
+| Mode       | Asks before                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------ |
+| `PARANOID` | Every tool call except file reads (`read`, `ls`, `grep`, `find`)                                       |
+| `CAREFUL`  | File writes (`write`, `edit`, `edit_lines`), kills, deletions, and the dangerous-command patterns      |
+| `YOLO`     | Only system or home deletion, disk writes, and `find / -delete`; everything else runs without a prompt |
 
-The status bar shows the active mode on a green, orange, or red background. Start a session in YOLO with `--auto-edits`. YOLO affects writes only: `permission-gate` still refuses bash file edits and asks before destructive commands. Print and JSON modes have no dialog, so a call that needs approval is blocked, in every mode: unattended runs need `--auto-edits` and a command set that the guards accept.
+The status bar shows the active mode on a green, orange, or red background. Start a session in YOLO with `--auto-edits`. YOLO approves writes, bash file edits, ordinary deletions, process kills, and broad dangerous commands such as `git reset --hard` without a prompt. `permission-gate` still asks before commands that can destroy a system tree or a disk, and blocks them when there is no dialog. Print and JSON modes have no dialog, so a call that needs approval is blocked in every mode: unattended runs need `--auto-edits` and a command set that the guards accept.
 
 ## Status reporting
 
@@ -42,10 +42,10 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 
 - CAREFUL approves writes under `/tmp`, `/private/tmp`, and `/var/folders` without a prompt. The check resolves the path, so `..` cannot leave those roots. Symlinks are not resolved: a link inside a temporary directory can point outside it, and a write or deletion through that link skips approval.
 - `permission-gate` detects bash file writes with `unbash` and a set of known commands. Redirections from commands it does not model, in-place editors it does not know, and obfuscated commands can pass without a prompt.
-- Deletions (`rm`, `unlink`, `rmdir`, `git rm`) ask for approval in CAREFUL and YOLO unless every target is inside a scratch root. The scratch roots themselves are not exempt. `find -delete` and `shred` always ask.
-- Any command that stops a process asks for approval in CAREFUL. In YOLO only mass kills ask: `pkill`, `killall`, `kill -1`, and lookups such as `kill $(pgrep ...)` or `pgrep ... | xargs kill`. A `kill` aimed at an explicit PID runs without a prompt in YOLO. `kill -0` and `kill -l` do not stop a process and never ask.
+- Deletions (`rm`, `unlink`, `rmdir`, `git rm`) ask for approval in CAREFUL unless every target is inside a scratch root. The scratch roots themselves are not exempt. In YOLO only deletion of a system tree or a home directory asks: `rm -rf /`, `rm -rf /etc`, `rm -rf ~`, `rm -rf /home/u`, `rm -rf /home/*`. Ordinary deletions such as `rm -rf build` or `rm -rf /tmp/build` run without a prompt.
+- Any command that stops a process asks for approval in CAREFUL. YOLO does not check process kills. `kill -0` and `kill -l` do not stop a process and never ask.
 - The write gate covers `write`, `edit`, and `edit_lines`. Other tools that can change files, such as MCP tools or custom tools, are not gated in CAREFUL.
-- Destructive-command checks are text patterns. They also match a command that only mentions a destructive shape in an argument, such as `rg 'git reset --hard' docs/`. Expect a prompt, not silence.
+- CAREFUL checks destructive commands as text patterns. They also match a command that only mentions a destructive shape in an argument, such as `rg 'git reset --hard' docs/`. Expect a prompt, not silence. YOLO uses the parser instead and asks only for disk writes (`dd` or a redirect to a block device, `mkfs`, `parted`, `sgdisk`, `wipefs`, `shred` on a device) and `find` with `-delete` under a system tree.
 - The approval prompt repeats the payload of the call it asks about: the edit diff, the written content, or the full command. A long payload scrolls with PgUp/PgDn, Home/End, or the wheel in fullscreen. The subject line above it stays cut at 160 characters. Print and JSON modes use the built-in selector, which shows only that subject line.
 - The `powershell` tool is not analyzed. PARANOID asks for it; CAREFUL does not. On native Windows, keep the `bash` tool when you need the write gate.
 - Control characters in tool arguments are replaced with spaces before display. They never reach the terminal through the dialog.
@@ -53,17 +53,17 @@ These guards are advisory. They are heuristic checks in the Pi process, not a sa
 
 ## Extensions
 
-| Extension                       | Behavior                                                                                                                                                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                                           |
-| `extensions/permission-gate.ts` | Asks before privileged or destructive bash commands, including process kills and deletions outside the scratch roots. Refuses bash commands that edit files in place. Runs in CAREFUL and YOLO. Silent in PARANOID. |
-| `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                                      |
+| Extension                       | Behavior                                                                                                                                                                                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions/confirm-writes.ts`  | Owns the approval mode. Asks before writes, and in PARANOID before every other tool call.                                                                                                                                                                  |
+| `extensions/permission-gate.ts` | Asks before destructive bash commands in CAREFUL: kills, deletions outside the scratch roots, and the dangerous-command patterns. Refuses bash commands that edit files in place. In YOLO asks only before system or disk destruction. Silent in PARANOID. |
+| `extensions/thinking-step.ts`   | Show the reasoning step while the model works.                                                                                                                                                                                                             |
 
 `extensions/approval-status.ts` is shared by the two guards and carries the status bridges. It is not loaded as an extension.
 
 ## bash-guard
 
-`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes, deletions, and process kills. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
+`bash-guard/guard.ts` parses bash commands with `unbash`. It finds file writes, deletions, process kills, and severe disk or system destruction. `extensions/permission-gate.ts` and the Claude Code hooks in `~/.claude/hooks/` import it.
 
 ## Tests
 

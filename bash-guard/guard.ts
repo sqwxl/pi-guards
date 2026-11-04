@@ -23,7 +23,7 @@ export type Kill = {
   readonly mass: boolean;
 };
 
-import { isInsideScratch } from "../paths.ts";
+import { isCriticalPath, isInsideScratch } from "../paths.ts";
 
 const SCRATCH = /^\/(?:dev|tmp|private\/tmp|var\/folders)(?:\/|$)/;
 const DYNAMIC = /[$`]/;
@@ -56,6 +56,9 @@ const GIT_APPLY_READ_ONLY = new Set([
 const PATTERN_KILLERS = new Set(["pkill", "killall"]);
 const DELETERS = new Set(["rm", "unlink", "rmdir"]);
 const PID_LOOKUPS = new Set(["pgrep", "pidof", "ps", "lsof"]);
+const DISK_TOOLS = new Set(["parted", "sgdisk", "wipefs", "shred"]);
+const FORMATTERS = new Set(["mkfs", "mke2fs", "mkswap", "mkdosfs", "newfs"]);
+const BLOCK_DEVICE = /^\/dev\/(?:r?disk|sd|hd|vd|xvd|nvme|mmcblk|mapper|dm-)/;
 
 const WRAPPER_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   sudo: new Set([
@@ -153,6 +156,14 @@ export function findBashDeletion(
   cwd: string,
 ): string | undefined {
   return findInScript(command, 0, (node) => checkDeletion(node, cwd));
+}
+
+/** Deletion of a system tree, a disk overwrite, or a filesystem format. */
+export function findBashSevereAction(
+  command: string,
+  cwd: string,
+): string | undefined {
+  return findInScript(command, 0, (node) => checkSevereAction(node, cwd));
 }
 
 function findInScript<T>(
@@ -318,11 +329,7 @@ function checkDeletion(node: AstNode, cwd: string): string | undefined {
     return undefined;
   }
   const { base, args } = resolved;
-  const targets = DELETERS.has(base)
-    ? deletionTargets(args)
-    : base === "git" && nodeValue(args[0]) === "rm"
-      ? deletionTargets(args.slice(1))
-      : undefined;
+  const targets = deletionTargetsFor(base, args);
   if (targets === undefined) {
     return undefined;
   }
@@ -339,6 +346,101 @@ function checkDeletion(node: AstNode, cwd: string): string | undefined {
     .map((target) => nodeValue(target) ?? "a dynamic path")
     .join(" ");
   return `'${base}${base === "git" ? " rm" : ""}' deletes ${shown || "files it cannot resolve"}`;
+}
+
+function checkCriticalDeletion(node: AstNode, cwd: string): string | undefined {
+  if (node.type !== "Command") {
+    return undefined;
+  }
+  const resolved = resolveWrapped(commandWords(node));
+  if (!resolved) {
+    return undefined;
+  }
+  const { base, args } = resolved;
+  const targets = deletionTargetsFor(base, args);
+  const critical = targets?.find((target) => {
+    const value = nodeValue(target);
+    return value !== undefined && isCriticalPath(value, cwd);
+  });
+  if (!critical) {
+    return undefined;
+  }
+  return `'${base}${base === "git" ? " rm" : ""}' deletes ${nodeValue(critical)}`;
+}
+
+/** Targets of a deletion command, or undefined when the command does not delete. */
+function deletionTargetsFor(
+  base: string,
+  args: AstNode[],
+): AstNode[] | undefined {
+  if (DELETERS.has(base)) {
+    return deletionTargets(args);
+  }
+  if (base === "git" && nodeValue(args[0]) === "rm") {
+    return deletionTargets(args.slice(1));
+  }
+  return undefined;
+}
+
+function checkSevereAction(node: AstNode, cwd: string): string | undefined {
+  const deletion = checkCriticalDeletion(node, cwd);
+  if (deletion) {
+    return deletion;
+  }
+  if (node.type === "Redirect") {
+    return checkDeviceRedirect(node);
+  }
+  if (node.type !== "Command") {
+    return undefined;
+  }
+  const resolved = resolveWrapped(commandWords(node));
+  if (!resolved) {
+    return undefined;
+  }
+  const { base, args } = resolved;
+  const values = args.map((arg) => nodeValue(arg) ?? "");
+
+  if (base === "dd") {
+    const output = values
+      .find((value) => value.startsWith("of="))
+      ?.slice("of=".length);
+    if (output !== undefined && BLOCK_DEVICE.test(output)) {
+      return `'dd' writes to the disk ${output}`;
+    }
+  }
+  if (
+    DISK_TOOLS.has(base) &&
+    values.some((value) => BLOCK_DEVICE.test(value))
+  ) {
+    return `'${base}' changes the disk`;
+  }
+  if (
+    (FORMATTERS.has(base) || base.startsWith("mkfs.")) &&
+    values.some((value) => value.startsWith("/dev/"))
+  ) {
+    return `'${base}' formats the disk ${values.find((value) => value.startsWith("/dev/"))}`;
+  }
+  if (base === "find" && values.includes("-delete")) {
+    const root = values.find((value) => !value.startsWith("-"));
+    if (root !== undefined && isCriticalPath(root, cwd)) {
+      return `'find' deletes files under ${root}`;
+    }
+  }
+  return undefined;
+}
+
+function checkDeviceRedirect(node: AstNode): string | undefined {
+  const operator = node.operator;
+  const path = node.target ? nodeValue(node.target) : undefined;
+  if (
+    operator !== undefined &&
+    path !== undefined &&
+    WRITE_REDIRECTS.has(operator) &&
+    BLOCK_DEVICE.test(path)
+  ) {
+    return `'${operator} ${path}' overwrites the disk`;
+  }
+  return undefined;
 }
 
 /** Positional arguments, skipping options until `--`. */
