@@ -2,7 +2,7 @@ import { findBashSevereAction } from "./guard.ts";
 
 // Actions that YOLO still gates: system or home deletion, disk overwrite,
 // format, and a find that deletes under a system tree.
-const cwd = "/home/u/project";
+const cwd = "/var/home/u/project";
 
 const positives = [
   "rm -rf /",
@@ -14,6 +14,9 @@ const positives = [
   "rm -rf /home",
   "rm -rf /home/u",
   "rm -rf /home/*",
+  "rm -rf /var/home",
+  "rm -rf /var/home/u",
+  "rm -rf ..",
   "rm -rf ~",
   "rm -rf ~/",
   "rm -rf $HOME",
@@ -51,6 +54,7 @@ const negatives = [
   "rm -rf .",
   "rm -rf /tmp/build",
   "rm -rf /home/u/project",
+  "rm -rf /var/home/u/project",
   "rm -rf ~/project",
   'rm -rf "$DIR"',
   "echo 'rm -rf /'",

@@ -59,7 +59,8 @@ function staticPath(path: string): string {
 /**
  * True when deleting `path` would destroy a system tree or a user's home.
  * Glob suffixes count as their parent. Dynamic paths other than `~` and
- * `$HOME` cannot be resolved and never count.
+ * `$HOME` cannot be resolved and never count. Paths inside a user's home are
+ * ordinary data, including on systems that keep home under `/var/home`.
  */
 export function isCriticalPath(path: string, cwd: string): boolean {
   const value = staticPath(path);
@@ -70,12 +71,25 @@ export function isCriticalPath(path: string, cwd: string): boolean {
     return false;
   }
   const resolved = resolve(cwd, value);
-  if (resolved === "/home" || resolved === "/Users") {
+  const home = homePath(resolved);
+  if (home === "root") {
     return true;
   }
-  if (/^\/(?:home|Users)\/[^/]+$/.test(resolved)) {
-    return true;
+  if (home === "inside") {
+    return false;
   }
   const top = "/" + resolved.split("/")[1];
   return SYSTEM_ROOTS.has(top);
+}
+
+/** `root` for a home directory or its parent, `inside` for a path below one. */
+function homePath(path: string): "root" | "inside" | undefined {
+  if (path === "/home" || path === "/Users" || path === "/var/home") {
+    return "root";
+  }
+  const match = /^\/(?:home|Users|var\/home)\/[^/]+(\/|$)/.exec(path);
+  if (!match) {
+    return undefined;
+  }
+  return match[1] === "/" ? "inside" : "root";
 }

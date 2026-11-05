@@ -73,6 +73,13 @@ check("critical: home root", isCriticalPath("/home", project), true);
 check("critical: home dir", isCriticalPath("/home/u", project), true);
 check("critical: home glob", isCriticalPath("/home/*", project), true);
 check("critical: macOS home", isCriticalPath("/Users/u", project), true);
+check("critical: var home root", isCriticalPath("/var/home", project), true);
+check("critical: var home dir", isCriticalPath("/var/home/u", project), true);
+check(
+  "critical: var home project",
+  isCriticalPath("/var/home/u/project", project),
+  false,
+);
 check("critical: tilde", isCriticalPath("~", project), true);
 check("critical: tilde slash", isCriticalPath("~/", project), true);
 check("critical: HOME", isCriticalPath("$HOME", project), true);
